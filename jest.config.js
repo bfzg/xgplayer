@@ -23,8 +23,8 @@ module.exports = {
   collectCoverageFrom: [
     'packages/xgplayer-dash/src/**/*.js',
     'packages/xgplayer-flv/src/**/*.js',
-    'packages/xgplayer-hls/src/**/*.js',
-    'packages/xgplayer-transmuxer/src/**/*.js',
+    'packages/xgplayer-hls/src/**/*.{js,ts}',
+    'packages/xgplayer-transmuxer/src/**/*.{js,ts}',
     'packages/xgplayer-soft-decode/src/**/*.js',
     'packages/xgplayer-cast/src/**/*.js',
     '!**/node_modules/**'
@@ -34,20 +34,13 @@ module.exports = {
   // coverageDirectory: undefined,
 
   // An array of regexp pattern strings used to skip coverage collection
-  coveragePathIgnorePatterns: [
-    '/node_modules/',
-    'index.umd.js'
-  ],
+  coveragePathIgnorePatterns: ['/node_modules/', 'index.umd.js'],
 
   // Indicates which provider should be used to instrument code for coverage
   coverageProvider: 'v8',
 
   // A list of reporter names that Jest uses when writing coverage reports
-  coverageReporters: [
-    'text',
-    'lcov',
-    'clover'
-  ],
+  coverageReporters: ['text', 'lcov', 'clover'],
 
   // An object that configures minimum threshold enforcement for coverage results
   // coverageThreshold: undefined,
@@ -74,9 +67,7 @@ module.exports = {
   // maxWorkers: "50%",
 
   // An array of directory names to be searched recursively up from the requiring module's location
-  moduleDirectories: [
-    'node_modules'
-  ],
+  moduleDirectories: ['node_modules'],
 
   // An array of file extensions your modules use
   // moduleFileExtensions: [
@@ -203,18 +194,21 @@ module.exports = {
 
   // A map from regular expressions to paths to transformers
   transform: {
-    '\\.[jt]sx?$': ['babel-jest', {
-      presets: [
-        ['@babel/preset-env', { targets: { node: 'current' } }],
-        '@babel/preset-typescript'
-      ]
-    }]
+    '\\.[jt]sx?$': [
+      'babel-jest',
+      {
+        presets: [
+          ['@babel/preset-env', { targets: { node: 'current' } }],
+          '@babel/preset-typescript'
+        ]
+      }
+    ]
   },
 
   // An array of regexp pattern strings that are matched against all source file paths, matched files will skip transformation
   transformIgnorePatterns: [
     'node_modules/(?!crypto-es/.*)'
-  //   "\\.pnp\\.[^\\/]+$"
+    //   "\\.pnp\\.[^\\/]+$"
   ]
 
   // An array of regexp pattern strings that are matched against all modules before the module loader will automatically return a mock for them
