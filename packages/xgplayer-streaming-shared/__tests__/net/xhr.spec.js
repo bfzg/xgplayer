@@ -132,7 +132,8 @@ describe('XhrLoader', () => {
       url: 'https://example.com/video.mp4',
       logger,
       range: [0, 9],
-      responseType: ResponseType.ARRAY_BUFFER
+      responseType: ResponseType.ARRAY_BUFFER,
+      rangeRequestMustReturn206: true
     })).rejects.toMatchObject({
       message: 'bad response,response range start does not match request range',
       response: {

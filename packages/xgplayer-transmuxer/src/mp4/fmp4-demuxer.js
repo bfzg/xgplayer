@@ -65,7 +65,18 @@ export class FMP4Demuxer {
       moofBoxes.filter(moofBox => moofBox.size <= moofBox.data.length).forEach(moofBox => {
         const moof = MP4Parser.moof(moofBox)
         // 通过（trun.dataOffset + all samples的合并值）最大值计算得到下一个moof.start，也可以通过mdat box获取，此处为前者逻辑
-        this.__nextMoofStart = moof.start + Math.max(...moof.traf.map(v => v.trun.samples.reduce((ret, w) => ret + w.size, v.trun.dataOffset || 0)))
+        this.__nextMoofStart = moof.start + Math.max(...moof.traf.map(v => {
+          const trun = v.trun
+          if (!trun) return 0
+          const samples = trun.samples
+          // A trun may only carry the data offset, letting every sample fall back to
+          // the tfhd defaults, so there is no sample table to sum here.
+          if (!samples || !samples.length) {
+            const size = (v.tfhd && v.tfhd.defaultSampleSize) || 0
+            return (trun.dataOffset || 0) + size * (trun.sampleCount || 0)
+          }
+          return samples.reduce((ret, w) => ret + w.size, trun.dataOffset || 0)
+        }))
         this.__loadedMoofWraps.push({
           start: moof.start,
           nextMoofStart: this.__nextMoofStart,
@@ -174,19 +185,18 @@ export class FMP4Demuxer {
         if (!moovBox) throw new Error('cannot found moov box')
         MP4Parser.moovToTrack(MP4Parser.moov(moovBox), null, audioTrack)
       }
-      const moofBox = MP4Parser.findBox(audioData, ['moof'])[0]
-      if (moofBox) {
+      // One segment may hold several moof boxes, each with its own tfdt, so
+      // every fragment has to be mapped against the media time it declares.
+      MP4Parser.findBox(audioData, ['moof']).forEach((moofBox) => {
         const samples = MP4Parser.moofToSamples(MP4Parser.moof(moofBox), null, audioTrack)[audioTrack.id]
+        if (!samples) return
         const baseMediaDecodeTime = audioTrack.baseMediaDecodeTime
-        if (samples) {
-          const baseOffset = moofBox.start
-          samples.map(x => {
-            x.offset += baseOffset
-            const sampleData = audioData.subarray(x.offset, x.offset + x.size)
-            audioTrack.samples.push(new AudioSample(x.dts + baseMediaDecodeTime, sampleData, x.duration))
-          })
-        }
-      }
+        samples.forEach(x => {
+          const offset = x.offset + moofBox.start
+          const sampleData = audioData.subarray(offset, offset + x.size)
+          audioTrack.samples.push(new AudioSample(x.dts + baseMediaDecodeTime, sampleData, x.duration))
+        })
+      })
     }
 
     if (videoData) {
@@ -195,23 +205,24 @@ export class FMP4Demuxer {
         if (!moovBox) throw new Error('cannot found moov box')
         MP4Parser.moovToTrack(MP4Parser.moov(moovBox), videoTrack, audioTrack)
       }
-      const moofBox = MP4Parser.findBox(videoData, ['moof'])[0]
-      if (moofBox) {
+      let nalSize
+      // Same as above: a segment is not limited to a single moof, and the
+      // per-fragment tfdt decides the base time of that fragment's samples.
+      MP4Parser.findBox(videoData, ['moof']).forEach((moofBox) => {
         const tracks = MP4Parser.moofToSamples(MP4Parser.moof(moofBox), videoTrack, audioTrack)
         const videoBaseMediaDecodeTime = videoTrack.baseMediaDecodeTime
         const audioBaseMediaDecodeTime = audioTrack.baseMediaDecodeTime
         const baseOffset = moofBox.start
-        let nalSize
         Object.keys(tracks).forEach(k => {
           // eslint-disable-next-line eqeqeq
           if (videoTrack.id == k) {
             tracks[k].map(x => {
-              x.offset += baseOffset
+              const offset = x.offset + baseOffset
               const sample = new VideoSample((typeof x.pts === 'number' ? x.pts : x.dts) + videoBaseMediaDecodeTime, x.dts + videoBaseMediaDecodeTime)
               sample.duration = x.duration
               sample.gopId = x.gopId
               if (x.keyframe) sample.setToKeyframe()
-              const sampleData = videoData.subarray(x.offset, x.offset + x.size)
+              const sampleData = videoData.subarray(offset, offset + x.size)
               sample.data = sampleData
               let start = 0
               const len = sampleData.length - 1
@@ -226,13 +237,23 @@ export class FMP4Demuxer {
             // eslint-disable-next-line eqeqeq
           } else if (audioTrack.id == k) {
             tracks[k].map(x => {
-              x.offset += baseOffset
-              const sampleData = videoData.subarray(x.offset, x.offset + x.size)
+              const offset = x.offset + baseOffset
+              const sampleData = videoData.subarray(offset, offset + x.size)
               audioTrack.samples.push(new AudioSample(x.dts + audioBaseMediaDecodeTime, sampleData, x.duration))
             })
           }
         })
-      }
+      })
+    }
+
+    // 与 demuxPart 同理：sample.pts 由每个 moof 的 tfdt 推出，遍历结束后
+    // baseMediaDecodeTime 停在最后一个 moof 的 tfdt 上，已经不代表本批数据的起点。
+    // 重写成首个 sample 的 pts，remux 时写入的 tfdt 才与样本真正开始的位置一致。
+    if (videoTrack.samples.length) {
+      videoTrack.baseMediaDecodeTime = videoTrack.samples[0].pts
+    }
+    if (audioTrack.samples.length) {
+      audioTrack.baseMediaDecodeTime = audioTrack.samples[0].pts
     }
 
     return {

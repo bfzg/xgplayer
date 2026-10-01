@@ -4,6 +4,9 @@
  *  url?: string,
  *  isLive?: boolean,
  *  softDecode?: boolean,
+ *  softDecodeMode?: boolean | 'auto',
+ *  softDecodeOptions?: import('xgplayer-soft-decode').SoftDecodeOption,
+ *  createSoftSink?: (context: object) => any,
  *  analyzeDuration?: number,
  *  maxJumpDistance?: number,
  *  maxLatency?: number,
@@ -19,17 +22,17 @@
  *  disconnectTime?: number,
  *  fetchOptions?: RequestInit,
  *  seamlesslyReload: boolean,
-*   keepStatusAfterSwitch?: boolean,
-*   onlyVideo?: boolean,
-*   onlyAudio?: boolean,
-*   preferMMS?: boolean,
-*   mseLowLatency?: boolean,
-*   durationForLowLatency?: number, // s
-*   chunkCountForSpeed?: number,
-*   skipChunkSize?: number, // Byte
-*   longtimeNoReceived?: number,
-*   preProcessUrl?: (url: string, ext?: { [propName: string]: any }) => { url: string, [propName: string]: any }
-*   enableStartGapJump?: boolean
+ *   keepStatusAfterSwitch?: boolean,
+ *   onlyVideo?: boolean,
+ *   onlyAudio?: boolean,
+ *   preferMMS?: boolean,
+ *   mseLowLatency?: boolean,
+ *   durationForLowLatency?: number, // s
+ *   chunkCountForSpeed?: number,
+ *   skipChunkSize?: number, // Byte
+ *   longtimeNoReceived?: number,
+ *   preProcessUrl?: (url: string, ext?: { [propName: string]: any }) => { url: string, [propName: string]: any }
+ *   enableStartGapJump?: boolean
  * }} FlvOption
  */
 
@@ -37,7 +40,7 @@
  * @param {FlvOption} opts
  * @returns {FlvOption}
  */
-export function getOption (opts) {
+export function getOption(opts) {
   const ret = {
     retryCount: 3,
     retryDelay: 1000,
@@ -48,6 +51,9 @@ export function getOption (opts) {
     defaultVodLoadSize: 10000000,
     isLive: false,
     softDecode: false,
+    softDecodeMode: false,
+    softDecodeOptions: null,
+    createSoftSink: null,
     bufferBehind: 10,
     maxJumpDistance: 3,
     analyzeDuration: 20000,

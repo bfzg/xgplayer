@@ -1,51 +1,91 @@
-import { BasePlugin, Events, Errors } from 'xgplayer'
+import { BasePlugin, Errors, Events } from 'xgplayer'
 import { EVENT } from 'xgplayer-streaming-shared'
 import { Flv, logger } from './flv'
 import PluginExtension from './plugin-extension'
+
+/**
+ * Locate a soft-decode sink factory without adding a hard dependency on the
+ * wasm package: it can be injected through `softDecodeOptions.createSoftSink`
+ * or registered globally (UMD build or `registerSoftDecode()`).
+ * @param {object} [options]
+ * @returns {((context: object) => any) | null}
+ */
+function resolveSoftSinkFactory(options = {}) {
+  if (typeof options.createSoftSink === 'function') return options.createSoftSink
+  const registered =
+    (typeof globalThis !== 'undefined' &&
+      (globalThis.XGPlayerSoftDecode || globalThis.SoftDecode)) ||
+    null
+  if (registered && typeof registered.createSoftSinkFactory === 'function') {
+    const base = { ...options }
+    delete base.createSoftSink
+    return registered.createSoftSinkFactory(base)
+  }
+  return null
+}
 
 export class FlvPlugin extends BasePlugin {
   static Flv = Flv
 
   static isStreamingPlugin = true
 
-  static get pluginName () {
+  static get pluginName() {
     return 'flv'
   }
 
   logger = logger
 
   /** @type {Flv} */
-  flv = null;
+  flv = null
 
   /** @type {PluginExtension} */
   pluginExtension = null
 
-
   /** @type {Flv} */
-  get core () {
+  get core() {
     return this.flv
   }
 
   /** @type {string} */
-  get version () {
+  get version() {
     return this.flv?.version
   }
 
   /** @type {boolean} */
-  get softDecode () {
+  get softDecode() {
     const mediaType = this.player?.config?.mediaType
-    return !!mediaType && mediaType !== 'video' && mediaType !== 'audio' && mediaType !== 'offscreen-video'
+    return (
+      !!mediaType &&
+      mediaType !== 'video' &&
+      mediaType !== 'audio' &&
+      mediaType !== 'offscreen-video'
+    )
   }
 
-  get loader () {
+  /**
+   * Built-in wasm soft-decode request (`softDecode: 'auto' | true`). Distinct
+   * from {@link FlvPlugin#softDecode}, which detects an external soft media element.
+   * Returns `null` when the user left it unset, so the caller can default to
+   * `'auto'` once a soft sink factory is available.
+   * @returns {boolean | 'auto' | null}
+   */
+  get softDecodeMode() {
+    const config = this.player?.config || {}
+    const mode = config.softDecode ?? config.flv?.softDecodeMode
+    if (mode === true || mode === 'auto') return mode
+    if (mode === false) return false
+    return null
+  }
+
+  get loader() {
     return this.flv?.loader
   }
 
-  get transferCost () {
+  get transferCost() {
     return this.flv._transferCost.transferCost
   }
 
-  beforePlayerInit () {
+  beforePlayerInit() {
     const config = this.player.config
     const mediaElem = this.player.media || this.player.video
 
@@ -60,13 +100,54 @@ export class FlvPlugin extends BasePlugin {
       flvOpts.disconnectTime = 0
     }
 
+    const legacySoftVideo =
+      flvOpts.softDecode === undefined ? this.softDecode : !!flvOpts.softDecode
+    const requestedMode = legacySoftVideo ? false : this.softDecodeMode
+    const softDecodeOptions = config.softDecodeOptions || flvOpts.softDecodeOptions || {}
+    const resolvedFactory = legacySoftVideo
+      ? null
+      : resolveSoftSinkFactory(softDecodeOptions)
+    // Registering the soft-decode package arms the automatic HEVC fallback even
+    // when the caller never mentioned `softDecode`. Explicit `false` still wins.
+    const effectiveMode = legacySoftVideo
+      ? false
+      : requestedMode === null
+        ? resolvedFactory
+          ? 'auto'
+          : false
+        : requestedMode
+    // An explicit `false` means "never software decode": leave the sink
+    // unwired so not even a runtime/error fallback can select it.
+    const createSoftSink = effectiveMode === false ? null : resolvedFactory
+    if ((requestedMode === true || requestedMode === 'auto') && !resolvedFactory) {
+      logger.warn(
+        'softDecode is enabled but no soft sink factory is available, keeping native decode'
+      )
+    }
+
     this.flv = new Flv({
-      softDecode: this.softDecode,
       isLive: config.isLive,
       media: mediaElem,
-      preProcessUrl: (url, ext) => this.player?.preProcessUrl?.(url, ext) || {url, ext},
-      ...flvOpts
+      preProcessUrl: (url, ext) => this.player?.preProcessUrl?.(url, ext) || { url, ext },
+      ...flvOpts,
+      softDecode: legacySoftVideo,
+      softDecodeMode: createSoftSink ? effectiveMode : false,
+      softDecodeOptions,
+      createSoftSink
     })
+
+    if (createSoftSink) {
+      this.player.forceSoftDecode = (reason) => this.flv?.fallbackToSoft(reason)
+      if (typeof config.onSoftDecodeFallback === 'function') {
+        this.flv.on(EVENT.SOFT_DECODE_FALLBACK, (info) => {
+          try {
+            config.onSoftDecodeFallback(info)
+          } catch (error) {
+            logger.warn('onSoftDecodeFallback failed', error)
+          }
+        })
+      }
+    }
 
     if (!this.softDecode) {
       BasePlugin.defineGetterOrSetter(this.player, {
@@ -80,12 +161,16 @@ export class FlvPlugin extends BasePlugin {
     }
 
     if (this.softDecode) {
-      this.pluginExtension = new PluginExtension({
-        media: this.player.video,
-        isLive: config.isLive,
-        ...config.flv
-      }, this)
-      this.player.forceDegradeToVideo = (...args) => this.pluginExtension?.forceDegradeToVideo(...args)
+      this.pluginExtension = new PluginExtension(
+        {
+          media: this.player.video,
+          isLive: config.isLive,
+          ...config.flv
+        },
+        this
+      )
+      this.player.forceDegradeToVideo = (...args) =>
+        this.pluginExtension?.forceDegradeToVideo(...args)
     }
 
     if (config.isLive) {
@@ -115,6 +200,7 @@ export class FlvPlugin extends BasePlugin {
     this._transCoreEvent(EVENT.STREAM_EXCEPTION)
     this._transCoreEvent(EVENT.SWITCH_URL_SUCCESS)
     this._transCoreEvent(EVENT.SWITCH_URL_FAILED)
+    this._transCoreEvent(EVENT.SOFT_DECODE_FALLBACK)
 
     if (!flvOpts.manualLoad) {
       this.loadSource(config.url, flvOpts.streamRes)
@@ -148,11 +234,11 @@ export class FlvPlugin extends BasePlugin {
    * - mediaType: 默认检测 MSE 对 H264 codec是否支持，传入 true 或者配置参数的mediaType的取值检测 WebAssembly是否支持
    * - codec: 暂无使用
    */
-  static isSupported (mediaType, codec) {
+  static isSupported(mediaType, codec) {
     return Flv.isSupported(mediaType, codec)
   }
 
-  static isSupportedMMS () {
+  static isSupportedMMS() {
     return typeof ManagedMediaSource !== 'undefined'
   }
 
@@ -189,7 +275,7 @@ export class FlvPlugin extends BasePlugin {
     if (this.flv) this.flv.switchURL(to)
   }
 
-  _transError () {
+  _transError() {
     this.flv.on(EVENT.ERROR, (err) => {
       if (this.player) {
         this.player.emit(Events.ERROR, new Errors(this.player, err))
@@ -197,7 +283,7 @@ export class FlvPlugin extends BasePlugin {
     })
   }
 
-  _transCoreEvent (eventName) {
+  _transCoreEvent(eventName) {
     this.flv.on(eventName, (e) => {
       if (this.player) {
         this.player.emit('core_event', {

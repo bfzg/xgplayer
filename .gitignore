@@ -94,3 +94,4 @@ fixtures/*/*
 *.pem
 
 examples/
+/release/

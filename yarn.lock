@@ -1541,6 +1541,57 @@
     "@jridgewell/resolve-uri" "^3.1.0"
     "@jridgewell/sourcemap-codec" "^1.4.14"
 
+"@libmedia/avcodec@1.3.1":
+  version "1.3.1"
+  resolved "https://registry.yarnpkg.com/@libmedia/avcodec/-/avcodec-1.3.1.tgz#aeacbd437f0cf2fd9c5ebced4f207db4405432f3"
+  integrity sha512-NtuVxz2eANARdl/53P6sHma2NSrgtCiV08TQN5w2yNYrcaPWv61fxa23kHaVoYdWw+pzcbiNHGPIAM8Mt4+mQQ==
+  dependencies:
+    "@libmedia/avformat" "1.3.1"
+    "@libmedia/avutil" "1.3.1"
+    "@libmedia/cheap" "~1.3.1"
+    "@libmedia/common" "~2.3.0"
+
+"@libmedia/avformat@1.3.1":
+  version "1.3.1"
+  resolved "https://registry.yarnpkg.com/@libmedia/avformat/-/avformat-1.3.1.tgz#1b387b1d83a1de2625d171e3b2d8be002b8dc917"
+  integrity sha512-pWvtbKvfxRcU5PPb6KWzphZkz4jeLxHU46hGTdEGdZvPLeiEcrTy94UEoF8pYQ4/CGqjQ5YL8hxjfEm2FyR9LQ==
+  dependencies:
+    "@libmedia/avcodec" "1.3.1"
+    "@libmedia/avprotocol" "1.3.1"
+    "@libmedia/avutil" "1.3.1"
+    "@libmedia/cheap" "~1.3.1"
+    "@libmedia/common" "~2.3.0"
+
+"@libmedia/avprotocol@1.3.1":
+  version "1.3.1"
+  resolved "https://registry.yarnpkg.com/@libmedia/avprotocol/-/avprotocol-1.3.1.tgz#691ff963595bdb9335574f586757d4eb059e4afd"
+  integrity sha512-ACX8PMpj1o0qqP/WMikT5dxEcNRJv9oquIF7J9Nt9uKagQilR8HnFYGccWPUBI72cYabXTRxxdYYOnE4aa9ifw==
+  dependencies:
+    "@libmedia/avutil" "1.3.1"
+    "@libmedia/cheap" "~1.3.1"
+    "@libmedia/common" "~2.3.0"
+
+"@libmedia/avutil@1.3.1":
+  version "1.3.1"
+  resolved "https://registry.yarnpkg.com/@libmedia/avutil/-/avutil-1.3.1.tgz#0d6d7965eb893382815d228eca184d3415918d5a"
+  integrity sha512-JIucrOKVKA5sacC3X21GxWTrO//QG0Vl665dLRvNWJZUH0Bb56jQWzVkcWKB8+JX8Dt74IidbwXJ1JsdyGSVSg==
+  dependencies:
+    "@libmedia/cheap" "~1.3.1"
+    "@libmedia/common" "~2.3.0"
+
+"@libmedia/cheap@1.3.1", "@libmedia/cheap@~1.3.1":
+  version "1.3.1"
+  resolved "https://registry.yarnpkg.com/@libmedia/cheap/-/cheap-1.3.1.tgz#bff59bcbda55ea5b1c1e5f2dd0b1e8076409361d"
+  integrity sha512-bCbYDCBinaVlaTy4vBjUoIJyCThK9JzVWEPZYZeJkHUxNKZ5g5BZ5hlft/nmS/c7ojaEyHMaRGOUNZ72nA7f6A==
+  dependencies:
+    "@libmedia/common" "~2.3.0"
+    commander "^13.1.0"
+
+"@libmedia/common@~2.3.0":
+  version "2.3.0"
+  resolved "https://registry.yarnpkg.com/@libmedia/common/-/common-2.3.0.tgz#c8f66d1ca2283227e26b7560953dd29d38283d5d"
+  integrity sha512-fD8v6oDs2EeD+/BU6jhsuPF5MTJx2f18+avhTB7gTgkpQDPzrgpCz6e8qHJDuWA+rbNQA89hwMTBOhzL6b8HEQ==
+
 "@nodelib/fs.scandir@2.1.5":
   version "2.1.5"
   resolved "https://registry.yarnpkg.com/@nodelib/fs.scandir/-/fs.scandir-2.1.5.tgz#7619c2eb21b25483f6d167548b4cfd5a7488c3d5"
@@ -2450,6 +2501,11 @@ combined-stream@^1.0.8:
   integrity sha512-FQN4MRfuJeHf7cBbBMJFXhKSDq+2kAArBlmRBvcvFE5BB1HZKXtSFASDhdlz9zOYwxh8lDdnvmMOe/+5cdoEdg==
   dependencies:
     delayed-stream "~1.0.0"
+
+commander@^13.1.0:
+  version "13.1.0"
+  resolved "https://registry.yarnpkg.com/commander/-/commander-13.1.0.tgz#776167db68c78f38dcce1f9b8d7b8b9a488abf46"
+  integrity sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw==
 
 compare-func@^2.0.0:
   version "2.0.0"
@@ -5929,15 +5985,6 @@ xgplayer-mp4-loader@0.0.1:
     xgplayer-streaming-shared "3.0.0-next.2-1"
     xgplayer-transmuxer "3.0.0-next.2-1"
 
-xgplayer-mp4-loader@3.0.24:
-  version "3.0.24"
-  resolved "https://registry.yarnpkg.com/xgplayer-mp4-loader/-/xgplayer-mp4-loader-3.0.24.tgz#0ef722468d3cd3402aaab91ef181d2006c253514"
-  integrity sha512-nK57uCuoBopZa0Wdy1vBnLoYT10ynuUjFwajxtnFNZ7vqREqsUA7JohdaVKR3HikOrzBjObjgypiY/AU5sfgwg==
-  dependencies:
-    eventemitter3 "^4.0.7"
-    xgplayer-streaming-shared "3.0.24"
-    xgplayer-transmuxer "3.0.24"
-
 xgplayer-streaming-shared@3.0.0-next.2-1:
   version "3.0.0-next.2-1"
   resolved "https://registry.yarnpkg.com/xgplayer-streaming-shared/-/xgplayer-streaming-shared-3.0.0-next.2-1.tgz#357cd2d160f3f12a21dacd8a8fadb7f598639166"
@@ -5953,20 +6000,6 @@ xgplayer-streaming-shared@3.0.0-next.8:
   dependencies:
     "@babel/runtime" "^7.15.3"
     core-js "3"
-
-xgplayer-streaming-shared@3.0.24:
-  version "3.0.24"
-  resolved "https://registry.yarnpkg.com/xgplayer-streaming-shared/-/xgplayer-streaming-shared-3.0.24.tgz#665fdb7a91bc1d60a9ff8de23f54b34f91ef2f32"
-  integrity sha512-6ROPxuwAIYWysF8qWMeVTHzlc+KFVhU0d79WY9B3st1RqBidEhysGqQRbwd9WHMuWePbLQv2zj6yRg7PVcdXKA==
-  dependencies:
-    eventemitter3 "^4.0.7"
-
-xgplayer-streaming-shared@3.0.25-rc.4:
-  version "3.0.25-rc.4"
-  resolved "https://registry.yarnpkg.com/xgplayer-streaming-shared/-/xgplayer-streaming-shared-3.0.25-rc.4.tgz#bf7e121be478e31bc0093320e865f144681a00ac"
-  integrity sha512-aIFQ39QpZaw9uwOEv3lZG68+B+mwh63hi834s8SLgranwH5G4VH7ESOG5UOo77Xv3zT1R0FMslK1ZPKBvHS7pA==
-  dependencies:
-    eventemitter3 "^4.0.7"
 
 xgplayer-transmuxer@3.0.0-next.2-1:
   version "3.0.0-next.2-1"

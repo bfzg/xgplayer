@@ -175,7 +175,8 @@ async function build(target, { all } = { all: false }) {
             cssPreprocessorOptions: config.cssPreprocessorOptions,
             plugins: config.plugins,
             externals: config.externals,
-            visualizer: config.visualizer
+            visualizer: config.visualizer,
+            buildTarget: config.buildTarget
           })
           cfg.build.minify = 'terser'
           cfg.build.terserOptions = {
@@ -237,7 +238,8 @@ async function build(target, { all } = { all: false }) {
         replace: rep,
         banner,
         cssPreprocessorOptions: config.cssPreprocessorOptions,
-        plugins: config.plugins
+        plugins: config.plugins,
+        buildTarget: config.buildTarget
       })
       cfg = ctx.runPreBuild(cfg, target, pkgInfo) || cfg
       console.log(`Building [ES] ${cyan(entryEs)}`)

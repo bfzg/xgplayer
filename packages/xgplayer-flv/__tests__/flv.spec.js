@@ -87,6 +87,10 @@ describe('Flv', () => {
     }
   })
 
+  const settle = async (turns = 8) => {
+    for (let i = 0; i < turns; i += 1) await Promise.resolve()
+  }
+
   const media = document.createElement('video')
 
   afterEach(() => {
@@ -183,6 +187,52 @@ describe('Flv', () => {
     await flv.destroy()
     expect(bufferDestroy).toHaveBeenCalled()
     expect(removeAllListeners).toHaveBeenCalled()
+  })
+
+  test('_onProgress keeps overlapping chunks in arrival order', async () => {
+    const flv = new Flv({ media, url: 'url' })
+    const order = []
+    const gates = []
+    flv._bufferService = {
+      appendBuffer: jest.fn((chunk) => new Promise((resolve) => {
+        order.push(['enter', chunk[0]])
+        gates.push(() => {
+          order.push(['exit', chunk[0]])
+          resolve()
+        })
+      })),
+      evictBuffer: jest.fn()
+    }
+    const response = { headers: { get: () => null }, url: 'url' }
+
+    const first = flv._onProgress(new Uint8Array([1]), false, {}, response)
+    const second = flv._onProgress(new Uint8Array([2]), false, {}, response)
+
+    await settle()
+    // The loader does not await the callback, so the second chunk must wait.
+    expect(order).toEqual([['enter', 1]])
+
+    gates[0]()
+    await first
+    await settle()
+    expect(order).toEqual([['enter', 1], ['exit', 1], ['enter', 2]])
+
+    gates[1]()
+    await second
+    expect(order).toEqual([['enter', 1], ['exit', 1], ['enter', 2], ['exit', 2]])
+  })
+
+  test('_onProgress drops work invalidated by a load reset', async () => {
+    const flv = new Flv({ media, url: 'url' })
+    const appendBuffer = jest.fn(() => Promise.resolve())
+    flv._bufferService = { appendBuffer, evictBuffer: jest.fn() }
+    const response = { headers: { get: () => null }, url: 'url' }
+
+    const pending = flv._onProgress(new Uint8Array([1]), false, {}, response)
+    flv._progressToken += 1
+
+    await pending
+    expect(appendBuffer).not.toHaveBeenCalled()
   })
 
 })

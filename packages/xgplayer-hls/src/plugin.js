@@ -41,6 +41,27 @@ export function parseSwitchUrlArgs(args, plugin) {
   return options
 }
 
+/**
+ * Locate a soft-decode sink factory without adding a hard dependency on the
+ * wasm package: it can be injected through `softDecodeOptions.createSoftSink`
+ * or registered globally (UMD build or `registerSoftDecode()`).
+ * @param {object} [options]
+ * @returns {((context: object) => any) | null}
+ */
+function resolveSoftSinkFactory(options = {}) {
+  if (typeof options.createSoftSink === 'function') return options.createSoftSink
+  const registered =
+    (typeof globalThis !== 'undefined' &&
+      (globalThis.XGPlayerSoftDecode || globalThis.SoftDecode)) ||
+    null
+  if (registered && typeof registered.createSoftSinkFactory === 'function') {
+    const base = { ...options }
+    delete base.createSoftSink
+    return registered.createSoftSinkFactory(base)
+  }
+  return null
+}
+
 export class HlsPlugin extends BasePlugin {
   static Hls = Hls
 
@@ -79,6 +100,21 @@ export class HlsPlugin extends BasePlugin {
     )
   }
 
+  /**
+   * Built-in wasm soft-decode request (`softDecode: 'auto' | true`). Distinct
+   * from {@link HlsPlugin#softDecode}, which detects an external soft media element.
+   * Returns `null` when the user left it unset, so the caller can default to
+   * `'auto'` once a soft sink factory is available.
+   * @returns {boolean | 'auto' | null}
+   */
+  get softDecodeMode() {
+    const config = this.player?.config || {}
+    const mode = config.softDecode ?? config.hls?.softDecodeMode
+    if (mode === true || mode === 'auto') return mode
+    if (mode === false) return false
+    return null
+  }
+
   beforePlayerInit() {
     const config = this.player.config
     const mediaElem = this.player.media || this.player.video
@@ -88,7 +124,7 @@ export class HlsPlugin extends BasePlugin {
       (!config.url &&
         // private config key
         !config.__allowHlsEmptyUrl__) ||
-      (!this.softDecode && !hlsOpts.preferMMS && MSE.isMMSOnly())
+      (!this.softDecode && !this.softDecodeMode && !hlsOpts.preferMMS && MSE.isMMSOnly())
     ) {
       return
     }
@@ -127,14 +163,57 @@ export class HlsPlugin extends BasePlugin {
     if (hlsOpts.disconnectTime === null || hlsOpts.disconnectTime === undefined)
       hlsOpts.disconnectTime = 0
 
-    this.hls = new Hls({
+    const hlsCfg = {
       softDecode: this.softDecode,
       isLive: config.isLive,
       media: mediaElem,
       startTime: config.startTime,
       url: config.url,
       ...hlsOpts
-    })
+    }
+    const legacySoftVideo =
+      hlsOpts.softDecode === undefined ? this.softDecode : !!hlsOpts.softDecode
+    const requestedMode = legacySoftVideo ? false : this.softDecodeMode
+    const softDecodeOptions = config.softDecodeOptions || hlsCfg.softDecodeOptions || {}
+    const resolvedFactory = legacySoftVideo
+      ? null
+      : resolveSoftSinkFactory(softDecodeOptions)
+    // Registering the soft-decode package arms the automatic HEVC fallback even
+    // when the caller never mentioned `softDecode`. Explicit `false` still wins.
+    const softDecodeMode = legacySoftVideo
+      ? false
+      : requestedMode === null
+        ? resolvedFactory
+          ? 'auto'
+          : false
+        : requestedMode
+    // An explicit `false` means "never software decode": leave the sink
+    // unwired so not even a runtime/error fallback can select it.
+    const createSoftSink = softDecodeMode === false ? null : resolvedFactory
+    if ((requestedMode === true || requestedMode === 'auto') && !resolvedFactory) {
+      logger.warn(
+        'softDecode is enabled but no soft sink factory is available, keeping native decode'
+      )
+    }
+    hlsCfg.softDecode = legacySoftVideo
+    hlsCfg.softDecodeMode = createSoftSink ? softDecodeMode : false
+    hlsCfg.softDecodeOptions = softDecodeOptions
+    hlsCfg.createSoftSink = createSoftSink
+
+    this.hls = new Hls(hlsCfg)
+
+    if (createSoftSink) {
+      this.player.forceSoftDecode = (reason) => this.hls?.fallbackToSoft(reason)
+      if (typeof config.onSoftDecodeFallback === 'function') {
+        this.hls.on(EVENT.SOFT_DECODE_FALLBACK, (info) => {
+          try {
+            config.onSoftDecodeFallback(info)
+          } catch (error) {
+            logger.warn('onSoftDecodeFallback failed', error)
+          }
+        })
+      }
+    }
 
     if (!this.softDecode) {
       BasePlugin.defineGetterOrSetter(this.player, {
@@ -189,6 +268,7 @@ export class HlsPlugin extends BasePlugin {
     this._transCoreEvent(EVENT.STREAM_EXCEPTION)
     this._transCoreEvent(EVENT.SWITCH_URL_SUCCESS)
     this._transCoreEvent(EVENT.SWITCH_URL_FAILED)
+    this._transCoreEvent(EVENT.SOFT_DECODE_FALLBACK)
     this._transCoreEvent(Event.NO_AUDIO_TRACK)
     this._transCoreEvent(Event.STREAM_PARSED)
     this._transCoreEvent(Event.SUBTITLE_SEGMENTS)

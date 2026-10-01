@@ -1,6 +1,41 @@
-import { concatUint8Array, readBig32, UTF8 } from '../../src/utils'
+import { concatUint8Array, getHevcCodec, readBig32, UTF8 } from '../../src/utils'
 
 describe('Utils', () => {
+
+  test('getHevcCodec', () => {
+    // Main profile, level 3.1, typical 0x60000000 compatibility flags
+    expect(getHevcCodec({
+      generalProfileSpace: 0,
+      generalProfileIdc: 1,
+      generalProfileCompatibilityFlags: 0x60000000,
+      generalTierFlag: 0,
+      generalLevelIdc: 93,
+      generalConstraintIndicatorFlags: [0xb0, 0, 0, 0, 0, 0]
+    })).toBe('hev1.1.6.L93.B0')
+
+    // Main10 (compatibility bit reversed to 0x4), high tier, hvc1 prefix
+    expect(getHevcCodec({
+      generalProfileSpace: 0,
+      generalProfileIdc: 2,
+      generalProfileCompatibilityFlags: 0x20000000,
+      generalTierFlag: 1,
+      generalLevelIdc: 120,
+      generalConstraintIndicatorFlags: [0x90, 0, 0, 0, 0, 0]
+    }, 'hvc1')).toBe('hvc1.2.4.H120.90')
+
+    // Non-empty profile space ("A") and intermediate zero constraint bytes kept
+    expect(getHevcCodec({
+      generalProfileSpace: 1,
+      generalProfileIdc: 1,
+      generalProfileCompatibilityFlags: 0x60000000,
+      generalTierFlag: 0,
+      generalLevelIdc: 90,
+      generalConstraintIndicatorFlags: [0x01, 0, 0x02, 0, 0, 0]
+    })).toBe('hev1.A1.6.L90.01.00.02')
+
+    // Empty descriptor stays syntactically valid
+    expect(getHevcCodec()).toBe('hev1.0.0.L0')
+  })
 
   test('concatUint8Array', () => {
     expect(concatUint8Array()).toEqual(new Uint8Array([]))

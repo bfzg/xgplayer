@@ -1,25 +1,27 @@
 import EventEmitter from 'eventemitter3'
 import {
-  NetLoader,
-  Buffer,
-  MSE,
-  EVENT,
-  StreamingError,
   BandwidthService,
-  SeiService,
+  Buffer,
+  EVENT,
   GapService,
-  MediaStatsService,
+  getVideoPlaybackQuality,
   isMediaPlaying,
   Logger,
-  getVideoPlaybackQuality
+  MediaStatsService,
+  MSE,
+  NetLoader,
+  SeiService,
+  StreamingError
 } from 'xgplayer-streaming-shared'
 import { Logger as TransmuxerLogger } from 'xgplayer-transmuxer'
-import { BufferService } from './services'
 import { getOption } from './options'
+import { BufferService } from './services'
+import { TRANSFER_EVENT, TransferCost } from './services/transfer-cost'
 import { searchKeyframeIndex } from './utils'
-import { TransferCost, TRANSFER_EVENT } from './services/transfer-cost'
 
 export const logger = new Logger('flv')
+
+const noop = () => {}
 
 const MAX_HOLE = 0.1
 const MAX_START_GAP = 0.3
@@ -62,9 +64,17 @@ export class Flv extends EventEmitter {
   _acceptRanges = true
 
   /**
+   * Serializes `_onProgress` handling. The streaming loader invokes the
+   * callback without awaiting it, so two in-flight chunks would otherwise
+   * demux into the same (reused) track objects concurrently and lose data.
+   */
+  _progressChain = Promise.resolve()
+  _progressToken = 0
+
+  /**
    * @param {import('./options').FlvOption} opts
    */
-  constructor (opts) {
+  constructor(opts) {
     super()
     this._opts = getOption(opts)
     this.media = this._opts.media || document.createElement('video')
@@ -83,11 +93,14 @@ export class Flv extends EventEmitter {
     this._disconnectRetryCount = this._opts.disconnectRetryCount
     this._transferCost = new TransferCost()
 
-    this._bufferService = new BufferService(
-      this,
-      this._opts.softDecode ? this.media : undefined,
-      this._opts
-    )
+    // `softDecode` keeps its legacy meaning: an external soft-decoding media
+    // element (`MVideo`) receives the demuxed tracks directly. The built-in
+    // wasm soft sink is driven by `softDecodeMode` instead, so both can coexist.
+    const softVideo = this._opts.softDecode ? this.media : undefined
+    this._bufferService = new BufferService(this, softVideo, {
+      ...this._opts,
+      softDecode: this._opts.softDecodeMode || false
+    })
     this._seiService = new SeiService(this)
     this._bandwidthService = new BandwidthService({
       chunkCountForSpeed: this._opts.chunkCountForSpeed,
@@ -110,31 +123,56 @@ export class Flv extends EventEmitter {
     this.on(EVENT.FLV_SCRIPT_DATA, this._onFlvScriptData)
   }
 
-  get version () {
+  get version() {
     return __VERSION__
   }
 
-  get isLive () {
+  get isLive() {
     return this._opts.isLive
   }
 
-  get baseDts () {
+  get baseDts() {
     return this._bufferService?.baseDts
   }
 
-  get seekable () {
+  get seekable() {
     return !!this._keyframes && this._acceptRanges
   }
 
-  get loader () {
+  get loader() {
     return this._mediaLoader
   }
 
-  get blobUrl () {
+  get blobUrl() {
     return this._bufferService?.blobUrl
   }
 
-  speedInfo () {
+  /** Whether pictures are currently produced by software decoding. */
+  get isSoftDecoding() {
+    return !!this._bufferService?.isSoftDecoding
+  }
+
+  /**
+   * Live software-decode counters, or null while the MSE sink is active.
+   * @returns {{decoded: number, rendered: number, dropped: number, queue: number, variant?: string}|null}
+   */
+  get softDecodeStats() {
+    if (!this._bufferService?.isSoftDecoding) return null
+    return this._bufferService?.sink?.stats || null
+  }
+
+  /**
+   * Switch to software decoding at runtime (`lowdecode`, manual degradation).
+   * No-op when no soft sink factory was configured.
+   * @param {string} [reason]
+   * @param {object} [info]
+   * @returns {Promise<any>}
+   */
+  fallbackToSoft(reason, info) {
+    return this._bufferService?.fallbackToSoft(reason, info)
+  }
+
+  speedInfo() {
     return {
       speed: this._bandwidthService.getLatestSpeed(),
       avgSpeed: this._bandwidthService.getAvgSpeed(),
@@ -146,15 +184,15 @@ export class Flv extends EventEmitter {
   /**
    * @returns {Stats}
    */
-  getStats () {
+  getStats() {
     return this._stats.getStats()
   }
 
-  bufferInfo (maxHole = MAX_HOLE) {
+  bufferInfo(maxHole = MAX_HOLE) {
     return Buffer.info(Buffer.get(this.media), this.media?.currentTime, maxHole)
   }
 
-  playbackQuality () {
+  playbackQuality() {
     return getVideoPlaybackQuality(this.media)
   }
 
@@ -163,18 +201,22 @@ export class Flv extends EventEmitter {
    * @param {string} [url]
    * @return {Promise}
    */
-  async load (url, reuseMse = false, streamRes) {
+  async load(url, reuseMse = false, streamRes) {
     if (!this._bufferService) return
     await this._reset(reuseMse)
 
-    this._loadData(url, this._opts.isLive ? [] : [0, this._opts.defaultVodLoadSize], streamRes)
+    this._loadData(
+      url,
+      this._opts.isLive ? [] : [0, this._opts.defaultVodLoadSize],
+      streamRes
+    )
 
     clearTimeout(this._tickTimer)
     this._tickTimer = setTimeout(this._tick, this._tickInterval)
   }
 
   /** @return {Promise} */
-  async replay (seamlesslyReload = this._opts.seamlesslyReload, isPlayEmit) {
+  async replay(seamlesslyReload = this._opts.seamlesslyReload, isPlayEmit) {
     if (!this.media) return
 
     this._resetDisconnectCount()
@@ -193,7 +235,7 @@ export class Flv extends EventEmitter {
     return this.media.play(!isPlayEmit).catch(() => {})
   }
 
-  disconnect () {
+  disconnect() {
     logger.debug('disconnect!')
     this._bufferService?.resetSeamlessSwitchStats()
     return this._clear()
@@ -203,7 +245,7 @@ export class Flv extends EventEmitter {
    * @param {string} url
    * @param {boolean} [seamless=false]
    */
-  async switchURL (url, seamless) {
+  async switchURL(url, seamless) {
     if (!this._bufferService) return
 
     this._resetDisconnectCount()
@@ -237,7 +279,7 @@ export class Flv extends EventEmitter {
   }
 
   /** @return {Promise} */
-  async destroy () {
+  async destroy() {
     if (!this.media) return
     this.removeAllListeners()
     this._seiService.reset()
@@ -256,7 +298,7 @@ export class Flv extends EventEmitter {
    * @param {('video'|'audio')?} mediaType
    * @returns {Boolean}
    */
-  static isSupported (mediaType) {
+  static isSupported(mediaType) {
     if (!mediaType || mediaType === 'video' || mediaType === 'audio') {
       return MSE.isSupported()
     }
@@ -264,17 +306,17 @@ export class Flv extends EventEmitter {
     return typeof WebAssembly !== 'undefined'
   }
 
-  static enableLogger () {
+  static enableLogger() {
     Logger.enable()
     TransmuxerLogger.enable()
   }
 
-  static disableLogger () {
+  static disableLogger() {
     Logger.disable()
     TransmuxerLogger.disable()
   }
 
-  _emitError (error, endOfStream = true) {
+  _emitError(error, endOfStream = true) {
     logger.table(error)
     logger.error(error)
     logger.error(this.media?.error)
@@ -290,7 +332,7 @@ export class Flv extends EventEmitter {
     }
   }
 
-  async _reset (reuseMse = false) {
+  async _reset(reuseMse = false) {
     this._seiService.reset()
     this._bandwidthService.reset()
     this._stats.reset()
@@ -298,7 +340,7 @@ export class Flv extends EventEmitter {
     await this._bufferService.reset(reuseMse)
   }
 
-  async _loadData (url, range, streamRes) {
+  async _loadData(url, range, streamRes) {
     if (url) this._opts.url = url
     let finnalUrl = (url = this._opts.url)
     if (!url) throw new Error('Source url is missing')
@@ -322,7 +364,12 @@ export class Flv extends EventEmitter {
 
     this._loading = true
     try {
-      await this._mediaLoader.load({ url: finnalUrl, range, streamRes, firstMaxChunkSize: this._opts.firstMaxChunkSize })
+      await this._mediaLoader.load({
+        url: finnalUrl,
+        range,
+        streamRes,
+        firstMaxChunkSize: this._opts.firstMaxChunkSize
+      })
     } catch (error) {
       this._loading = false
       return this._emitError(StreamingError.network(error), false)
@@ -340,12 +387,25 @@ export class Flv extends EventEmitter {
    * firstByteTime: 首字节响应时间
    * @param {Response} response
    */
-  _onProgress = async (
+  _onProgress = (chunk, done, info, response) => {
+    // The loader fires progress callbacks without awaiting them, so enqueue
+    // the real handler to guarantee chunks are demuxed/appended in order.
+    const token = this._progressToken
+    const run = () => {
+      if (token !== this._progressToken) return undefined
+      return this._handleProgress(chunk, done, info, response)
+    }
+    const next = this._progressChain.then(run, run)
+    this._progressChain = next.then(noop, noop)
+    return next
+  }
+
+  async _handleProgress(
     chunk,
     done,
     { startTime, endTime, st, firstByteTime },
     response
-  ) => {
+  ) {
     this._loading = !done
     if (!this._firstProgressEmit) {
       if (!this.media) {
@@ -433,12 +493,14 @@ export class Flv extends EventEmitter {
     })
   }
 
-  async _clear () {
+  async _clear() {
     if (this._mediaLoader) await this._mediaLoader.cancel()
     clearTimeout(this._maxChunkWaitTimer)
     clearTimeout(this._tickTimer)
     this._loading = false
     this._firstProgressEmit = false
+    // Drop queued progress work from the previous load.
+    this._progressToken++
   }
 
   _end = () => {
@@ -480,7 +542,11 @@ export class Flv extends EventEmitter {
         }
         return
       }
-      if (opts.isLive && media.readyState === 4 && (bufferEnd - media.currentTime) > opts.disconnectTime) {
+      if (
+        opts.isLive &&
+        media.readyState === 4 &&
+        bufferEnd - media.currentTime > opts.disconnectTime
+      ) {
         this.disconnect()
       }
     }
@@ -505,7 +571,7 @@ export class Flv extends EventEmitter {
     if (this.isLive && !this._opts.mseLowLatency) {
       // update duration to Infinity
       if (this.media.duration !== Infinity) {
-        this._bufferService.updateDuration(Infinity).catch(e => {})
+        this._bufferService.updateDuration(Infinity).catch((e) => {})
       }
     }
   }
@@ -592,7 +658,7 @@ export class Flv extends EventEmitter {
     }
   }
 
-  _onFlvScriptData = sample => {
+  _onFlvScriptData = (sample) => {
     const keyframes = sample.data?.onMetaData?.keyframes
     const duration = sample.data?.onMetaData?.duration
     if (keyframes) {

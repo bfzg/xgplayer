@@ -148,8 +148,16 @@ export class FetchLoader extends EventEmitter {
         if (!response.ok) {
           throw new NetError(url, init, response, 'bad network response')
         }
-        if (this._getRangeResponseMismatchReason(response) || this._shouldAbortRangeRequestForNon206(response)) {
-          const error = new NetError(url, init, response, 'bad response,range request must return 206 unless redirected')
+        const mismatchReason = this._getRangeResponseMismatchReason(response)
+        if (mismatchReason || this._shouldAbortRangeRequestForNon206(response)) {
+          const error = new NetError(
+            url,
+            init,
+            response,
+            mismatchReason
+              ? `bad response,${mismatchReason}`
+              : 'bad response,range request must return 206 unless redirected'
+          )
           error.options = {index: this._index, range: this._range, vid: this._vid, priOptions: this._priOptions}
           await this.cancel()
           reject(error)
@@ -312,8 +320,15 @@ export class FetchLoader extends EventEmitter {
       } else {
         retData = data.value
       }
+      // A short stream can land in a single chunk, so the last read is
+      // {done: true} with no value. Flush what the first-chunk split kept back
+      // instead of merging it with undefined.
+      if (!retData && data.done && this._cacheData) {
+        retData = this._cacheData
+        this._cacheData = null
+      }
       if (retData && retData.byteLength > 0 || data.done) {
-        if (this._firstMaxChunkSize) {
+        if (this._firstMaxChunkSize && retData) {
           if (!this._firtstByte) {
             this._firtstByte++
             const tmp = retData.slice(0, this._firstMaxChunkSize)

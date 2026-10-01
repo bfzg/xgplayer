@@ -1,5 +1,7 @@
 import Player from '../../packages/xgplayer/src'
 import HlsPlayer from '../../packages/xgplayer-hls/src'
+// Registers globalThis.XGPlayerSoftDecode, which arms the wasm HEVC fallback.
+import '../../packages/xgplayer-soft-decode/src'
 
 localStorage.setItem('xgd', 1)
 function defaultOpt() {
@@ -15,17 +17,58 @@ function defaultOpt() {
     bufferBehind: 10,
     maxJumpDistance: 3,
     startTime: 0,
+    softDecode: 'auto',
+    softDecodeOptions: {},
     fixerConfig:{
       forceFixLargeGap:true,
       largeGapThreshold: 5
     }
   }
 }
+// Soft decode lives on the player config; `config.hls.softDecode` is the legacy
+// external soft-video-element path, so these keys must not be spread into hls.
+function splitSoftDecode (source) {
+  var rest = Object.assign({}, source)
+  var soft = { softDecode: rest.softDecode, softDecodeOptions: rest.softDecodeOptions }
+  delete rest.softDecode
+  delete rest.softDecodeOptions
+  return { pluginOpts: rest, soft: soft }
+}
 var cachedOpt = localStorage.getItem('xg:test:hls:opt')
 try { cachedOpt = JSON.parse(cachedOpt) } catch (error) { cachedOpt = undefined }
 var opts = Object.assign({
   url: 'https://test-streams.mux.dev/x36xhzz/url_0/193039199_mp4_h264_aac_hd_7.m3u8',
 }, defaultOpt(), cachedOpt)
+// Query params win over localStorage, so one case can be shared by link or
+// driven from a script: ?url=...&softDecode=true&autoplay=true&wasmBaseUrl=...
+;(function () {
+  var params = new URLSearchParams(window.location.search)
+  if (!params.toString()) return
+  var flags = { autoplay: 1, autoplayMuted: 1, isLive: 1 }
+  Object.keys(flags).forEach(function (key) {
+    var value = params.get(key)
+    if (value === null) return
+    opts[key] = value !== 'false' && value !== '0'
+  })
+  if (params.get('url')) opts.url = params.get('url')
+  var soft = params.get('softDecode')
+  if (soft === 'true' || soft === 'false') opts.softDecode = soft === 'true'
+  else if (soft) opts.softDecode = soft
+  var patch = {}
+  var texts = ['wasmBaseUrl', 'decoderWasmUrl', 'decoderWorkerUrl']
+  texts.forEach(function (key) {
+    if (params.get(key)) patch[key] = params.get(key)
+  })
+  var booleans = { openLog: 1, worker: 1 }
+  Object.keys(booleans).forEach(function (key) {
+    var value = params.get(key)
+    if (value === null) return
+    patch[key] = value !== 'false' && value !== '0'
+  })
+  if (Object.keys(patch).length) {
+    opts.softDecodeOptions = Object.assign({}, opts.softDecodeOptions, patch)
+  }
+})()
 var testPoint = Number(localStorage.getItem('xg:test:hls:point'))
 if (isNaN(testPoint)) testPoint = 0
 
@@ -49,6 +92,10 @@ window.onload = function () {
   var doTargetLatency = document.getElementById('target-latency')
   var doMaxLatency = document.getElementById('max-latency')
   var doDisconnectTime = document.getElementById('disconnect-time')
+  var doSoftDecode = document.querySelector('#soft-decode select')
+  var doSoftWorker = document.getElementById('soft-worker')
+  var doSoftLog = document.getElementById('soft-log')
+  var doSoftWasmBase = document.getElementById('soft-wasm-base')
 
   var dbResetOpt = document.getElementById('reset-opt')
   var dbApplyOpt = document.getElementById('apply-opt')
@@ -59,6 +106,7 @@ window.onload = function () {
   var dbSwitchUrl = document.getElementById('switch-url')
   var dbSetUrl = document.getElementById('set-url')
   var dbSeek = document.getElementById('seek')
+  var dbForceSoft = document.getElementById('force-soft')
 
   var dStreamsContainer = document.getElementById('streams')
   var dStreamForce = document.getElementById('stream-force')
@@ -71,6 +119,7 @@ window.onload = function () {
   var dsSpeed = document.getElementById('speed')
   var dsFrame = document.getElementById('frame')
   var dsBuffer = document.getElementById('buffer')
+  var dsDecode = document.getElementById('decode')
   var dsOption = document.getElementById('option')
 
   dTestPoint.selectedIndex = testPoint
@@ -103,6 +152,7 @@ window.onload = function () {
       init()
     }
     function init() {
+      var split = splitSoftDecode(opts)
       window.player = player = new Player({
         // mediaType: 'live-video',
         el: document.getElementById('player'),
@@ -112,7 +162,12 @@ window.onload = function () {
         startTime: opts.startTime,
         autoplay: opts.autoplay,
         autoplayMuted: opts.autoplayMuted,
-        hls: Object.assign({}, opts, {
+        softDecode: split.soft.softDecode,
+        softDecodeOptions: split.soft.softDecodeOptions,
+        onSoftDecodeFallback: function (info) {
+          console.warn('[soft-decode] fallback', info)
+        },
+        hls: Object.assign({}, split.pluginOpts, {
           fetchOptions: Object.assign({
             referrer: 'no-referrer',
             referrerPolicy: 'no-referrer'
@@ -309,8 +364,26 @@ window.onload = function () {
   inp(doTargetLatency).value = opts.targetLatency
   inp(doMaxLatency).value = opts.maxLatency
   inp(doDisconnectTime).value = opts.disconnectTime
+  inp(doSoftWorker).checked = opts.softDecodeOptions.worker === true
+  inp(doSoftLog).checked = !!opts.softDecodeOptions.openLog
+  inp(doSoftWasmBase).value = opts.softDecodeOptions.wasmBaseUrl || ''
+  doSoftDecode.value = opts.softDecode === false ? 'false' : opts.softDecode === true ? 'true' : 'auto'
+
+  function updateSoftDecodeOptions(patch) {
+    var merged = Object.assign({}, opts.softDecodeOptions, patch)
+    Object.keys(merged).forEach(function (key) {
+      if (merged[key] === '' || merged[key] === false) delete merged[key]
+    })
+    updateOpts('softDecodeOptions', merged)
+  }
 
   inp(doUrl).onchange = function () { updateOpts('url', this.value) }
+  doSoftDecode.onchange = function () {
+    updateOpts('softDecode', this.value === 'true' ? true : this.value === 'false' ? false : 'auto')
+  }
+  inp(doSoftWorker).onchange = function () { updateSoftDecodeOptions({ worker: this.checked }) }
+  inp(doSoftLog).onchange = function () { updateSoftDecodeOptions({ openLog: this.checked }) }
+  inp(doSoftWasmBase).onchange = function () { updateSoftDecodeOptions({ wasmBaseUrl: this.value }) }
   inp(doIsLive).onchange = function () { updateOpts('isLive', this.checked) }
   inp(doAutoplay).onchange = function () { updateOpts('autoplay', this.checked) }
   inp(doAutoplayMuted).onchange = function () { updateOpts('autoplayMuted', this.checked) }
@@ -362,6 +435,16 @@ window.onload = function () {
     player.seek(time)
   }
 
+  dbForceSoft.onclick = function () {
+    if (!player || typeof player.forceSoftDecode !== 'function') {
+      window.alert('当前播放器没有可用的内置软解（softDecode: false 或未注册软解包）')
+      return
+    }
+    player.forceSoftDecode('manual').then(function (sink) {
+      console.log('[soft-decode] switched', !!sink)
+    })
+  }
+
   dTestPoint.onchange = function () {
     localStorage.setItem('xg:test:hls:point', this.value)
     resetOpts()
@@ -400,6 +483,23 @@ window.onload = function () {
         dsSpeed.innerHTML =
           '<p>当前速度：' + Math.round(sp.speed / (8 * 1024)) + 'KB/s</p>' +
           '<p>平均速度：' + Math.round(sp.avgSpeed / (8 * 1024)) + 'KB/s</p>'
+
+
+        var sd = hls.isSoftDecoding ? hls.softDecodeStats : null
+        var media = player.media || {}
+        dsDecode.innerHTML =
+          '<p>解码方式：' + (hls.isSoftDecoding ? 'wasm 软解' : '浏览器硬解 MSE') + '</p>' +
+          '<p>播放状态：' + (media.paused ? 'paused' : 'playing') +
+            ' / readyState=' + media.readyState +
+            ' / ' + (media.videoWidth || 0) + 'x' + (media.videoHeight || 0) +
+            ' / src=' + String(media.currentSrc || media.src || '').slice(0, 24) + '</p>' +
+          (sd
+            ? '<p>wasm 变体：' + (sd.variant || '-') + '</p>' +
+              '<p>解码帧：' + sd.decoded + '</p>' +
+              '<p>渲染帧：' + sd.rendered + '</p>' +
+              '<p>丢弃帧：' + sd.dropped + '</p>' +
+              '<p>队列：' + sd.queue + '</p>'
+            : '')
 
       }
     }, 1000)

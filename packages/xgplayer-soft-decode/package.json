@@ -1,0 +1,50 @@
+{
+  "name": "xgplayer-soft-decode",
+  "version": "3.0.26",
+  "description": "wasm HEVC software decoding sink for xgplayer FLV/HLS",
+  "main": "dist/index.min.js",
+  "module": "es/index.js",
+  "typings": "es/index.d.ts",
+  "sideEffects": [
+    "./es/index.js",
+    "./dist/index.min.js"
+  ],
+  "libd": {
+    "umdName": "SoftDecode",
+    "buildTarget": "es2020"
+  },
+  "files": [
+    "dist",
+    "es"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public",
+    "tag": "latest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bytedance/xgplayer.git"
+  },
+  "keywords": [
+    "xgplayer",
+    "hevc",
+    "h265",
+    "wasm",
+    "soft-decode"
+  ],
+  "license": "MIT",
+  "unpkgFiles": [
+    "dist"
+  ],
+  "dependencies": {
+    "@libmedia/avcodec": "1.3.1",
+    "@libmedia/avutil": "1.3.1",
+    "@libmedia/cheap": "1.3.1",
+    "xgplayer-streaming-shared": "3.0.26",
+    "xgplayer-transmuxer": "3.0.26"
+  },
+  "peerDependencies": {
+    "core-js": ">=3.12.1"
+  }
+}

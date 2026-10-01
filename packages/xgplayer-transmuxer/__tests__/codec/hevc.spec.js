@@ -19,7 +19,7 @@ describe('HEVC', () => {
 
     expect(result.sps.width).toBe(544)
     expect(result.sps.height).toBe(960)
-    expect(result.sps.codec).toBe('hev1.1.6.L93.B0')
+    expect(result.sps.codec).toBe('hev1.1.6.L90.B0')
     expect(result.nalUnitSize).toBe(4)
     expect(result.vpsArr.length).toBe(1)
     expect(result.spsArr.length).toBe(1)
@@ -42,7 +42,7 @@ describe('HEVC', () => {
 
     expect(result.width).toBe(388)
     expect(result.height).toBe(300)
-    expect(result.codec).toBe('hev1.1.6.L93.B0')
+    expect(result.codec).toBe('hev1.1.6.L60.90')
   })
 
 })
