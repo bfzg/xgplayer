@@ -81,6 +81,16 @@ export class FlvPlugin extends BasePlugin {
     return this.flv?.loader
   }
 
+  /** Live latency in seconds, 0 while not live or nothing is buffered yet. */
+  get latency() {
+    return this.flv?.latency ?? 0
+  }
+
+  /** Playback rate asked for by the app, without the catch-up multiplier. */
+  get userPlaybackRate() {
+    return this.flv?.userPlaybackRate ?? this.player?.playbackRate ?? 1
+  }
+
   get transferCost() {
     return this.flv._transferCost.transferCost
   }
@@ -135,6 +145,10 @@ export class FlvPlugin extends BasePlugin {
       softDecodeOptions,
       createSoftSink
     })
+
+    // 直播延迟与用户倍速，供宿主页面读取（追帧会临时改写 media.playbackRate）
+    this.player.getLiveLatency = () => this.latency
+    this.player.getUserPlaybackRate = () => this.userPlaybackRate
 
     if (createSoftSink) {
       this.player.forceSoftDecode = (reason) => this.flv?.fallbackToSoft(reason)
@@ -193,6 +207,7 @@ export class FlvPlugin extends BasePlugin {
     this._transCoreEvent(EVENT.BUFFEREOS)
     this._transCoreEvent(EVENT.KEYFRAME)
     this._transCoreEvent(EVENT.CHASEFRAME)
+    this._transCoreEvent(EVENT.LIVE_CATCH_UP)
     this._transCoreEvent(EVENT.METADATA_PARSED)
     this._transCoreEvent(EVENT.SEI)
     this._transCoreEvent(EVENT.SEI_IN_TIME)

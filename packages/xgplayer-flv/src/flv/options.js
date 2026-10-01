@@ -11,6 +11,10 @@
  *  maxJumpDistance?: number,
  *  maxLatency?: number,
  *  targetLatency?: number,
+ *  liveCatchUp?: boolean,
+ *  liveCatchUpRate?: number,
+ *  liveCatchUpTime?: number,
+ *  liveCatchUpBand?: number,
  *  bufferBehind?: number,
  *  retryCount?: number,
  *  retryDelay?: number,
@@ -62,6 +66,12 @@ export function getOption(opts) {
     onlyVideo: false,
     onlyAudio: false,
     preferMMS: false,
+    // 直播平滑追帧。打开后本库会在延迟超过 targetLatency 时轻微提速，
+    // 把 playbackRate 临时抬到 userRate * (1 + liveCatchUpRate) 以内
+    liveCatchUp: false,
+    liveCatchUpRate: 0.3, // 最大追帧倍速增量，即最高 1.3x
+    liveCatchUpTime: 5, // 计划用几秒追平多出来的延迟
+    liveCatchUpBand: 0.3, // 死区，误差小于这个值不动倍速
     mseLowLatency: true, // mse 低延迟模式渲染 https://issues.chromium.org/issues/41161663
     durationForMSELowLatencyOff: 6, // s
     chunkCountForSpeed: 50,

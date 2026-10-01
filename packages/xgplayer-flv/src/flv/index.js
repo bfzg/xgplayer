@@ -26,6 +26,9 @@ const noop = () => {}
 const MAX_HOLE = 0.1
 const MAX_START_GAP = 0.3
 
+/** Rate changes below this are ignored, keeps the catch-up controller quiet */
+const RATE_EPS = 1e-4
+
 /**
  * @typedef {import("../../../xgplayer-streaming-shared/es/services/stats").StatsInfo} Stats
  */
@@ -60,6 +63,12 @@ export class Flv extends EventEmitter {
   _disconnectRetryCount = 0
   _preLoadEndPoint = 0
 
+  /** Rate the app asked for, kept apart from the live catch-up multiplier */
+  _userPlaybackRate = 1
+
+  /** Last rate written by this class; lets us tell our own writes from the app's */
+  _appliedCatchUpRate = null
+
   _keyframes = null
   _acceptRanges = true
 
@@ -79,6 +88,7 @@ export class Flv extends EventEmitter {
     this._opts = getOption(opts)
     this.media = this._opts.media || document.createElement('video')
     this._opts.media = null
+    this._userPlaybackRate = this.media.playbackRate || 1
     this._firstProgressEmit = false
     this._mediaLoader = new NetLoader({
       ...this._opts.fetchOptions,
@@ -119,6 +129,7 @@ export class Flv extends EventEmitter {
     this.media.addEventListener('timeupdate', this._onTimeupdate)
     this.media.addEventListener('progress', this._onBufferUpdate)
     this.media.addEventListener('waiting', this._onWaiting)
+    this.media.addEventListener('ratechange', this._onRatechange)
 
     this.on(EVENT.FLV_SCRIPT_DATA, this._onFlvScriptData)
   }
@@ -129,6 +140,23 @@ export class Flv extends EventEmitter {
 
   get isLive() {
     return this._opts.isLive
+  }
+
+  /**
+   * Playback rate requested by the app, without the live catch-up multiplier.
+   * @returns {number}
+   */
+  get userPlaybackRate() {
+    return this._userPlaybackRate
+  }
+
+  /**
+   * Live latency in seconds, end of the buffered range minus the playhead.
+   * @returns {number}
+   */
+  get latency() {
+    if (!this.media || !this.isLive) return 0
+    return Math.max(0, Buffer.end(Buffer.get(this.media)) - this.media.currentTime)
   }
 
   get baseDts() {
@@ -289,6 +317,7 @@ export class Flv extends EventEmitter {
     this.media.removeEventListener('timeupdate', this._onTimeupdate)
     this.media.removeEventListener('waiting', this._onWaiting)
     this.media.removeEventListener('progress', this._onBufferUpdate)
+    this.media.removeEventListener('ratechange', this._onRatechange)
     await Promise.all([this._clear(), this._bufferService.destroy()])
     this.media = null
     this._bufferService = null
@@ -589,15 +618,20 @@ export class Flv extends EventEmitter {
     const opts = this._opts
     const currentTime = this.media.currentTime
 
-    if (opts.isLive && opts.maxLatency && opts.targetLatency) {
+    if (opts.isLive && opts.targetLatency) {
       const bufferEnd = Buffer.end(Buffer.get(this.media))
       const latency = bufferEnd - currentTime
-      if (latency >= opts.maxLatency) {
-        this.media.currentTime = bufferEnd - opts.targetLatency
-        this.emit(EVENT.CHASEFRAME, {
-          currentTime: this.media.currentTime,
-          latency: opts.targetLatency
-        })
+      if (latency > 0) {
+        if (opts.maxLatency && latency >= opts.maxLatency) {
+          this.media.currentTime = bufferEnd - opts.targetLatency
+          this._applyLiveCatchUp(0)
+          this.emit(EVENT.CHASEFRAME, {
+            currentTime: this.media.currentTime,
+            latency: opts.targetLatency
+          })
+        } else if (opts.liveCatchUp) {
+          this._applyLiveCatchUp(latency)
+        }
       }
     }
     this._seiService.throw(currentTime, true)
@@ -605,6 +639,70 @@ export class Flv extends EventEmitter {
     if (opts.isLive || !this.seekable || this._loading) return
 
     this._checkPreload()
+  }
+
+  /**
+   * The app owns the playback rate; the catch-up multiplier borrows it. Anything
+   * written to the element that differs from our last write is treated as the
+   * rate the app asked for.
+   * @returns {number}
+   */
+  _syncUserPlaybackRate() {
+    if (!this.media) return this._userPlaybackRate
+    const rate = this.media.playbackRate
+    if (!rate) return this._userPlaybackRate
+    if (
+      this._appliedCatchUpRate !== null &&
+      Math.abs(rate - this._appliedCatchUpRate) < RATE_EPS
+    ) {
+      return this._userPlaybackRate
+    }
+    if (Math.abs(rate - this._userPlaybackRate) > RATE_EPS) {
+      this._userPlaybackRate = rate
+      this._appliedCatchUpRate = null
+    }
+    return this._userPlaybackRate
+  }
+
+  _onRatechange = () => {
+    this._syncUserPlaybackRate()
+  }
+
+  /**
+   * Smooth live catch-up. Rather than waiting for `maxLatency` and then jumping,
+   * the playhead is pulled back to `targetLatency` by playing a little faster,
+   * so accumulated stall latency drains without a visible skip.
+   * @param {number} latency seconds behind the end of the buffered range
+   */
+  _applyLiveCatchUp(latency) {
+    if (!this.media || this.media.seeking) return
+
+    const opts = this._opts
+    const userRate = this._syncUserPlaybackRate()
+    const excess = latency - opts.targetLatency - opts.liveCatchUpBand
+    const extra =
+      excess > 0
+        ? Math.min(
+            Math.round((excess / opts.liveCatchUpTime) * 100) / 100,
+            opts.liveCatchUpRate
+          )
+        : 0
+    const rate = userRate * (1 + extra)
+
+    if (Math.abs(rate - this.media.playbackRate) < RATE_EPS) return
+
+    this._appliedCatchUpRate = rate
+    this.media.playbackRate = rate
+    logger.debug(
+      `live catch-up, latency=${latency.toFixed(2)}s, rate=${rate.toFixed(3)}x`
+    )
+    this.emit(EVENT.LIVE_CATCH_UP, {
+      latency,
+      targetLatency: opts.targetLatency,
+      userRate,
+      extra,
+      playbackRate: rate
+    })
   }
 
   _onWaiting = () => {

@@ -54,9 +54,11 @@ describe('Flv', () => {
   })
 
   const seiServiceReset = jest.fn()
+  const seiServiceThrow = jest.fn()
   SeiService.mockImplementation(() => {
     return {
-      reset: seiServiceReset
+      reset: seiServiceReset,
+      throw: seiServiceThrow
     }
   })
 
@@ -233,6 +235,83 @@ describe('Flv', () => {
 
     await pending
     expect(appendBuffer).not.toHaveBeenCalled()
+  })
+
+
+  test('live catch-up drains accumulated latency with a small speed bump', () => {
+    let bufferEnd = 10
+    Buffer.get = jest.fn(() => ({}))
+    Buffer.end = jest.fn(() => bufferEnd)
+
+    const media = {
+      playbackRate: 1,
+      currentTime: 7,
+      seeking: false,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      play: jest.fn(() => Promise.resolve()),
+      pause: jest.fn()
+    }
+
+    const flv = new Flv({
+      media,
+      isLive: true,
+      targetLatency: 0.5,
+      maxLatency: 3,
+      liveCatchUp: true,
+      liveCatchUpBand: 0.3,
+      liveCatchUpTime: 5,
+      liveCatchUpRate: 0.3
+    })
+    const emit = jest.spyOn(flv, 'emit')
+
+    // 1) 超过 maxLatency 仍然是原来的硬跳，跳完倍速回到用户设定值
+    flv._onTimeupdate()
+    expect(media.currentTime).toBeCloseTo(9.5)
+    expect(media.playbackRate).toBe(1)
+    expect(emit).toHaveBeenCalledWith(EVENT.CHASEFRAME, expect.anything())
+
+    // 2) 多出来 1.4s - target 0.5 - band 0.3 = 0.6s，摊到 5s → 1.12x
+    media.currentTime = 8.6
+    flv._onTimeupdate()
+    expect(media.playbackRate).toBeCloseTo(1.12, 6)
+    expect(emit).toHaveBeenCalledWith(
+      EVENT.LIVE_CATCH_UP,
+      expect.objectContaining({ extra: 0.12, userRate: 1 })
+    )
+
+    // 3) 追平了就把倍速还回去
+    media.currentTime = 9.7
+    flv._onTimeupdate()
+    expect(media.playbackRate).toBe(1)
+
+    // 4) 用户在页面里改倍速，追帧倍率叠加在用户倍速上，不覆盖用户意图
+    media.playbackRate = 2
+    flv._onRatechange()
+    expect(flv.userPlaybackRate).toBe(2)
+    media.currentTime = 8.6
+    flv._onTimeupdate()
+    expect(media.playbackRate).toBeCloseTo(2.24, 6)
+    media.currentTime = 9.7
+    flv._onTimeupdate()
+    expect(media.playbackRate).toBe(2)
+    expect(flv.userPlaybackRate).toBe(2)
+  })
+
+  test('live catch-up stays off unless asked for', () => {
+    Buffer.get = jest.fn(() => ({}))
+    Buffer.end = jest.fn(() => 10)
+    const media = {
+      playbackRate: 1,
+      currentTime: 7,
+      seeking: false,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn()
+    }
+    const flv = new Flv({ media, isLive: true, targetLatency: 0.5, maxLatency: 20 })
+    flv._onTimeupdate()
+    expect(media.playbackRate).toBe(1)
+    expect(flv.latency).toBeCloseTo(3)
   })
 
 })
