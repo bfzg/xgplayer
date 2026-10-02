@@ -118,6 +118,28 @@ player.getLiveLatency()                // Live latency in seconds
 
 For HLS replace `flv` with `hls`.
 
+## Run Demo
+
+Clone the repo and run the demo page:
+
+```bash
+# 1. Install dependencies
+yarn
+
+# 2. Build all packages
+yarn build:all
+
+# 3. Start demo HTTP server
+cd demo
+bash start.sh
+# Open http://127.0.0.1:8080 in browser
+```
+
+The demo supports FLV / HLS playback with hardware/software decode switching and real-time status display.
+
+> **Note**: wasm binaries are loaded from CDN (jsDelivr) by default on first playback.
+> For offline use, add `?wasmBaseUrl=./wasm` to the URL and place wasm files under `demo/wasm/decode/`.
+
 ---
 
 ## Directory structure

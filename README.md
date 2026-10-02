@@ -121,6 +121,28 @@ player.getLiveLatency()                // 直播延迟（秒）
 
 hls 把 `flv` 换成 `hls`。
 
+## 运行 Demo
+
+克隆仓库后可直接运行演示页：
+
+```bash
+# 1. 安装依赖（首次）
+yarn
+
+# 2. 构建所有包
+yarn build:all
+
+# 3. 进入 demo 目录启动 HTTP 服务
+cd demo
+bash start.sh
+# 浏览器打开 http://127.0.0.1:8080
+```
+
+演示页支持 FLV / HLS 播放，可在界面切换硬解/软解模式，实时查看解码状态。
+
+> **注意**：wasm 软解文件默认从 CDN 加载（jsDelivr），首次播放时自动下载。
+> 如需离线使用，可在浏览器地址栏加 `?wasmBaseUrl=./wasm` 并自行放置 wasm 文件到 `demo/wasm/decode/` 目录。
+
 ---
 
 ## 目录说明

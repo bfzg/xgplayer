@@ -95,3 +95,6 @@ fixtures/*/*
 
 examples/
 /release/
+
+# demo build artifacts (copied from packages/*/dist/)
+demo/umd/

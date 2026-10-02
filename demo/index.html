@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>xgplayer HEVC 软解 Demo</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./umd/xgplayer.min.css">
+  <style>
+    :root { --line: #d8dce1; --muted: #6b7280; --ink: #1f2328; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--ink); background: #f6f7f9; }
+    header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--line); }
+    h1 { font-size: 16px; margin: 0; font-weight: 600; }
+    .badge { padding: 2px 10px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; background: #f2f3f5; color: var(--muted); }
+    .badge.ok { background: #e8f5ec; border-color: #b7e0c4; color: #15703a; }
+    .badge.fail { background: #fdecec; border-color: #f2c4c4; color: #a51e1e; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--line); }
+    .controls input, .controls select { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; background: #fff; min-width: 0; }
+    .controls input[type="url"] { flex: 1; min-width: 300px; }
+    .controls label { font-size: 13px; display: flex; align-items: center; gap: 4px; }
+    .controls label input[type="checkbox"] { width: 14px; height: 14px; }
+    .btn { padding: 6px 16px; border: 1px solid var(--line); border-radius: 4px; font: inherit; cursor: pointer; background: #fff; }
+    .btn-primary { background: #1f2328; border-color: #1f2328; color: #fff; }
+    .btn-primary:hover { background: #333; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px; }
+    @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+    #player-container { width: 100%; min-height: 400px; background: #000; border-radius: 6px; overflow: hidden; }
+    .panel { background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+    .panel + .panel { margin-top: 12px; }
+    .panel h2 { font-size: 12px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); font-weight: 600; color: var(--muted); }
+    .stats { display: grid; grid-template-columns: 90px 1fr; gap: 4px 8px; margin: 0; padding: 10px 12px; font-size: 13px; }
+    .stats dt { color: var(--muted); }
+    .stats dd { margin: 0; font-variant-numeric: tabular-nums; word-break: break-all; }
+    #log { height: 200px; overflow: auto; margin: 0; padding: 8px 12px; font: 12px/1.6 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
+    .probe { display: flex; gap: 6px; margin-left: auto; }
+    .source-hint { padding: 6px 20px; background: #fff8e1; font-size: 12px; color: #8d6e00; border-bottom: 1px solid var(--line); }
+    .source-hint a { color: #8d6e00; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🎬 xgplayer HEVC 软解 Demo</h1>
+    <div class="probe" id="probe"></div>
+  </header>
+  <div class="source-hint">
+    💡 wasm 默认从 CDN (jsDelivr) 加载，确保网络畅通。
+    也可在浏览器地址栏加 <code>?wasmBaseUrl=/wasm</code> 使用本地 wasm。
+    源码见 <a href="https://github.com/gemstone/xgplayer">github.com/gemstone/xgplayer</a>
+  </div>
+
+  <form class="controls" onsubmit="return false">
+    <input type="url" id="url" placeholder="播放地址，如 https://example.com/live/stream.flv 或 .m3u8" value="">
+    <select id="fmt">
+      <option value="auto">自动</option>
+      <option value="flv">FLV</option>
+      <option value="hls">HLS</option>
+    </select>
+    <select id="mode">
+      <option value="auto">自动（硬解优先）</option>
+      <option value="true">强制软解</option>
+      <option value="false">关闭软解</option>
+    </select>
+    <label><input type="checkbox" id="live" checked> 直播</label>
+    <label><input type="checkbox" id="muted" checked> 静音</label>
+    <button class="btn btn-primary" id="playBtn">▶ 播放</button>
+    <button class="btn" id="stopBtn">■ 停止</button>
+  </form>
+
+  <main>
+    <div id="player-container"></div>
+    <aside>
+      <section class="panel">
+        <h2>状态</h2>
+        <div class="stats" id="stats">
+          <dt>解码方式</dt><dd id="s-decode">-</dd>
+          <dt>wasm 变体</dt><dd id="s-variant">-</dd>
+          <dt>已解码</dt><dd id="s-decoded">0</dd>
+          <dt>已渲染</dt><dd id="s-rendered">0</dd>
+          <dt>丢帧</dt><dd id="s-dropped">0</dd>
+          <dt>播放时间</dt><dd id="s-time">00:00 / 00:00</dd>
+          <dt>状态</dt><dd id="s-state">-</dd>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>日志</h2>
+        <pre id="log">等待播放...</pre>
+      </section>
+    </aside>
+  </main>
+
+  <script src="./umd/xgplayer.min.js"></script>
+  <script src="./umd/xgplayer-soft-decode.min.js"></script>
+  <script src="./umd/xgplayer-hls.min.js"></script>
+  <script src="./umd/xgplayer-flv.min.js"></script>
+  <script>
+  (function () {
+    /* ----- helpers ----- */
+    var $ = function (id) { return document.getElementById(id) }
+    var log = function (msg) {
+      var el = $('log')
+      el.textContent += '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n'
+      el.scrollTop = el.scrollHeight
+    }
+    var fmtTime = function (sec) {
+      if (!isFinite(sec) || sec <= 0) return '00:00'
+      var m = Math.floor(sec / 60); var s = Math.floor(sec % 60)
+      return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s
+    }
+
+    /* ----- probe HEVC MSE support ----- */
+    ;(function probe() {
+      var tests = [
+        ['MP4 hvc1', 'video/mp4;codecs="hvc1.1.6.L93.B0"'],
+        ['MP4 hev1', 'video/mp4;codecs="hev1.1.6.L93.B0"'],
+      ]
+      var html = ''
+      tests.forEach(function (t) {
+        var ok = false
+        try { ok = !!(window.MediaSource && MediaSource.isTypeSupported(t[1])) } catch (e) {}
+        html += '<span class="badge ' + (ok ? 'ok' : 'fail') + '">' + t[0] + ' ' + (ok ? '✅ 硬解' : '❌ 不支持') + '</span>'
+      })
+      $('probe').innerHTML = html
+    })()
+
+    /* ----- player ----- */
+    var player = null
+
+    var getCore = function () {
+      if (!player || !player.plugins) return null
+      var hls = player.plugins.hls && player.plugins.hls.core
+      var flv = player.plugins.flv && player.plugins.flv.core
+      return hls || flv || null
+    }
+
+    var tick = function () {
+      if (!player || !player.media) return
+      var c = getCore()
+      var media = player.media
+      var soft = !!(c && c.isSoftDecoding)
+      var st = c && c.softDecodeStats
+
+      $('s-decode').textContent = soft ? '🧠 wasm 软解' : '⚡ 浏览器硬解 (MSE)'
+      $('s-variant').textContent = (st && st.variant) || '-'
+      $('s-decoded').textContent = (st && st.decoded) || '0'
+      $('s-rendered').textContent = (st && st.rendered) || '0'
+      $('s-dropped').textContent = (st && st.dropped) || '0'
+      $('s-time').textContent = fmtTime(media.currentTime) + ' / ' + fmtTime(media.duration)
+      $('s-state').textContent = media.paused ? '⏸ paused' : media.ended ? '⏹ ended' : '▶ playing'
+    }
+
+    var destroy = function () {
+      if (player) { try { player.destroy() } catch (e) {} player = null }
+      $('s-decode').textContent = '-'
+      $('s-variant').textContent = '-'
+      $('s-decoded').textContent = '0'
+      $('s-rendered').textContent = '0'
+      $('s-dropped').textContent = '0'
+      $('s-time').textContent = '00:00 / 00:00'
+      $('s-state').textContent = '-'
+    }
+
+    var build = function () {
+      var url = $('url').value.trim()
+      if (!url) { log('⚠️ 请填写播放地址'); return }
+
+      var fmt = $('fmt').value
+      if (fmt === 'auto') {
+        fmt = /\.m3u8(\?|#|$)/i.test(url) ? 'hls' : /\.flv(\?|#|$)/i.test(url) ? 'flv' : ''
+        if (!fmt) { log('⚠️ 无法自动判断格式，请手动选择 HLS 或 FLV'); return }
+      }
+
+      destroy()
+      var mode = $('mode').value
+      var params = new URLSearchParams(location.search)
+      var wasmBase = params.get('wasmBaseUrl') || undefined
+
+      var config = {
+        id: 'player-container',
+        url: url,
+        isLive: $('live').checked,
+        autoplay: true,
+        autoplayMuted: $('muted').checked,
+        plugins: [fmt === 'hls' ? window.HlsPlayer : window.FlvPlayer],
+        softDecode: mode === 'auto' ? 'auto' : mode === 'true',
+        softDecodeOptions: wasmBase ? { wasmBaseUrl: wasmBase } : undefined,
+        onSoftDecodeFallback: function (info) {
+          log('🔄 回退软解: ' + (info && (info.reason || JSON.stringify(info))))
+        }
+      }
+
+      log('🚀 创建播放器 [' + fmt + '] softDecode=' + JSON.stringify(config.softDecode))
+      if (wasmBase) log('📁 wasmBaseUrl=' + wasmBase)
+
+      player = new window.Player(config)
+      window._player = player // console 调试
+
+      player.on('canplay', function () { log('✅ canplay') })
+      player.on('playing', function () { log('▶️ playing') })
+      player.on('pause', function () { log('⏸ pause') })
+      player.on('ended', function () { log('⏹ ended') })
+      player.on('error', function (e) {
+        log('❌ error: ' + (e && (e.message || JSON.stringify(e))))
+      })
+    }
+
+    /* ----- events ----- */
+    $('playBtn').onclick = build
+    $('stopBtn').onclick = destroy
+    setInterval(tick, 500)
+
+    /* URL query auto-load */
+    var q = new URLSearchParams(location.search)
+    if (q.get('url')) {
+      $('url').value = q.get('url')
+      if (q.get('autoplay') !== 'false') build()
+    }
+  })()
+  </script>
+</body>
+</html>
