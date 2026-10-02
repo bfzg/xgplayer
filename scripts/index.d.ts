@@ -63,6 +63,13 @@ export declare interface Config {
    */
   prodSourceMap?: boolean;
   /**
+   * 打包产物的语法目标，对应 vite 的 build.target。
+   * 依赖里含有 BigInt 字面量（如 wasm glue）时需要设置，例如 'es2020'，
+   * 因为 esbuild 无法在 es2020 以下降级 BigInt。
+   * @default 'modules'
+   */
+  buildTarget?: string | string[];
+  /**
    * 代码语法降级配置，是否用 babel 进行语法降级，是否自动导入 polyfill。
    * 如果开启自动导入 polyfill 则需要自己安装 core-js。
    * 语法降级程度和要导入哪些 polyfill 可以使用 package.json 中的 browserslist 字段进行配置。

@@ -1,5 +1,5 @@
 module.exports = {
-  videoCodec: 'hev1.1.6.L93.B0',
+  videoCodec: 'hev1.1.6.L60.90',
   width: 388,
   height: 300,
   pps: [new Uint8Array([68, 1, 193, 114, 180, 98, 64])],

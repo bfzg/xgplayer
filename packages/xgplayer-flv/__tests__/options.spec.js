@@ -18,6 +18,29 @@ describe('getOption', () => {
     expect(opts.disconnectTime).toBe(undefined)
     expect(opts.isLive).toBe(false)
     expect(opts.seamlesslyReload).toBe(false)
+    expect(opts.liveCatchUp).toBe(false)
+    expect(opts.liveCatchUpRate).toBe(0.3)
+    expect(opts.liveCatchUpTime).toBe(5)
+    expect(opts.liveCatchUpBand).toBe(0.3)
+  })
+
+  test('live catch-up options can be overridden', () => {
+    const opts = getOption({
+      isLive: true,
+      liveCatchUp: true,
+      targetLatency: 0.5,
+      maxLatency: 2,
+      liveCatchUpRate: 0.15,
+      liveCatchUpTime: 3,
+      liveCatchUpBand: 0.2
+    })
+
+    expect(opts.liveCatchUp).toBe(true)
+    expect(opts.targetLatency).toBe(0.5)
+    expect(opts.maxLatency).toBe(2)
+    expect(opts.liveCatchUpRate).toBe(0.15)
+    expect(opts.liveCatchUpTime).toBe(3)
+    expect(opts.liveCatchUpBand).toBe(0.2)
   })
 
   test('override options', () => {

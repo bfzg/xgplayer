@@ -1,5 +1,7 @@
 import Player from '../../packages/xgplayer/src'
 import FlvPlayer from '../../packages/xgplayer-flv/src'
+// Registers globalThis.XGPlayerSoftDecode, which arms the wasm HEVC fallback.
+import '../../packages/xgplayer-soft-decode/src'
 
 // localStorage.setItem('xgd', 1)
 function defaultOpt() {
@@ -17,7 +19,11 @@ function defaultOpt() {
     maxReaderInterval: 5000,
     seamlesslyReload: false,
     firstMaxChunkSize: 20000,
-    manualLoad: true
+    manualLoad: true,
+    // `softDecodeMode` is the wasm fallback request. `flv.softDecode` is the
+    // legacy external soft-video-element path, so it stays unset here.
+    softDecodeMode: 'auto',
+    softDecodeOptions: {}
   }
 }
 var cachedOpt = localStorage.getItem('xg:test:flv:opt')
@@ -26,14 +32,53 @@ var opts = Object.assign({
   // url: 'https://1011.hlsplay.aodianyun.com/demo/game.flv',
   url: 'https://pull-flv-l1.douyincdn.com/stage/stream-399911386870710302_ld.flv?keeptime=00093a80&wsSecret=84c8c84e064fb6c6aaad6ec54c5c8247&wsTime=63315a10&abr_pts=1950715',
 }, defaultOpt(), cachedOpt)
+// Query params win over localStorage, so one case can be shared by link or
+// driven from a script: ?url=...&softDecodeMode=true&autoplay=true&isLive=false
+// The wasm request is `softDecodeMode`; `flv.softDecode` stays reserved for the
+// legacy external soft video element.
+;(function () {
+  var params = new URLSearchParams(window.location.search)
+  if (!params.toString()) return
+  var flags = { autoplay: 1, autoplayMuted: 1, isLive: 1, seamlesslyReload: 1, manualLoad: 1 }
+  Object.keys(flags).forEach(function (key) {
+    var value = params.get(key)
+    if (value === null) return
+    opts[key] = value !== 'false' && value !== '0'
+  })
+  if (params.get('url')) opts.url = params.get('url')
+  var soft = params.get('softDecodeMode') || params.get('softDecode')
+  if (soft === 'true') opts.softDecodeMode = true
+  else if (soft === 'false') opts.softDecodeMode = false
+  else if (soft) opts.softDecodeMode = soft
+  var patch = {}
+  var texts = ['wasmBaseUrl', 'decoderWasmUrl', 'decoderWorkerUrl']
+  texts.forEach(function (key) {
+    if (params.get(key)) patch[key] = params.get(key)
+  })
+  var booleans = { openLog: 1, worker: 1 }
+  Object.keys(booleans).forEach(function (key) {
+    var value = params.get(key)
+    if (value === null) return
+    patch[key] = value !== 'false' && value !== '0'
+  })
+  if (Object.keys(patch).length) {
+    opts.softDecodeOptions = Object.assign({}, opts.softDecodeOptions, patch)
+  }
+})()
 var testPoint = Number(localStorage.getItem('xg:test:flv:point'))
 
 if (isNaN(testPoint)) testPoint = 0
 
 window.onload = function () {
-  fetch('https://pull-demo.volcfcdnrd.com/live/st-4536524.flv').then(res => {
-    window.streamRes = res
-  })
+  // The manual-load test point feeds a pre-fetched Response into loadSource,
+  // so it has to be a response for the url that is actually going to play.
+  if (opts.manualLoad && opts.url) {
+    fetch(opts.url).then(res => {
+      window.streamRes = res
+    }).catch(() => {
+      window.streamRes = null
+    })
+  }
   var dTestPoint = document.getElementById('test-point')
   var dTestPointDesc = document.getElementById('test-point-desc')
 
@@ -54,6 +99,11 @@ window.onload = function () {
   var doMaxLatency = document.getElementById('max-latency')
   var doDisconnectTime = document.getElementById('disconnect-time')
 
+  var doSoftDecode = document.querySelector('#soft-decode select')
+  var doSoftWorker = document.getElementById('soft-worker')
+  var doSoftLog = document.getElementById('soft-log')
+  var doSoftWasmBase = document.getElementById('soft-wasm-base')
+
   var dbResetOpt = document.getElementById('reset-opt')
   var dbApplyOpt = document.getElementById('apply-opt')
   var dbPlay = document.getElementById('play')
@@ -63,6 +113,7 @@ window.onload = function () {
   var dbSwitchUrl = document.getElementById('switch-url')
   var dbSetUrl = document.getElementById('set-url')
   var dbSeek = document.getElementById('seek')
+  var dbForceSoft = document.getElementById('force-soft')
 
   var dlEvent = document.getElementById('event')
   var dlError = document.getElementById('error')
@@ -72,6 +123,7 @@ window.onload = function () {
   var dsFrame = document.getElementById('frame')
   var dsBuffer = document.getElementById('buffer')
   var dsOption = document.getElementById('option')
+  var dsDecode = document.getElementById('decode')
 
   dTestPoint.selectedIndex = testPoint
   dsOption.innerHTML = '<pre>' + JSON.stringify(opts, null, 2) + '</pre>'
@@ -102,6 +154,16 @@ window.onload = function () {
     localStorage.setItem('xg:test:flv:opt', JSON.stringify(opts))
     window.location.reload()
   }
+  function softOpts() {
+    return opts.softDecodeOptions || {}
+  }
+  function updateSoftDecodeOptions(patch) {
+    var merged = Object.assign({}, softOpts(), patch)
+    Object.keys(merged).forEach(function (key) {
+      if (merged[key] === '' || merged[key] === false) delete merged[key]
+    })
+    updateOpts('softDecodeOptions', merged)
+  }
   function initPlayer() {
     if (player) {
       player.destroy()
@@ -118,16 +180,18 @@ window.onload = function () {
         isLive: opts.isLive,
         autoplay: opts.autoplay,
         autoplayMuted: opts.autoplayMuted,
+        onSoftDecodeFallback: function (info) {
+          console.warn('[soft-decode] fallback', info)
+        },
         flv: {
           // streamRes: window.streamRes,
           ...opts
         }
       });
       player.once('ready', () => {
-        // console.log('streamRes', Date.now() - timeStart, streamRes, player.plugins.flv)
         if (player.config.flv.manualLoad) {
-          player.plugins.flv.loadSource(player.config.url, streamRes)
-          streamRes = null
+          player.plugins.flv.loadSource(player.config.url, window.streamRes)
+          window.streamRes = null
         }
       })
       dlEvent.innerHTML = ''
@@ -136,7 +200,9 @@ window.onload = function () {
       function pushEvent(name, value, container) {
         if (name === 'loadeddata') {
           console.log('loadeddata', Date.now() - window.timeStart)
-          player.plugins.flv.flv._mediaLoader._currentTask._loader._firstMaxChunkSize = null
+          // 首个分片只解析一次，之后放开限制继续收流
+          var loader = player.plugins.flv.flv?._mediaLoader?._currentTask?._loader
+          if (loader) loader._firstMaxChunkSize = null
         }
         container = container || dlEvent
         if (container === dlEvent && dlLogPause.checked) return
@@ -255,6 +321,10 @@ window.onload = function () {
   inp(doMaxLatency).value = opts.maxLatency
   inp(doDisconnectTime).value = opts.disconnectTime
   inp(doMaxReaderInterval).value = opts.maxReaderInterval
+  inp(doSoftWorker).checked = softOpts().worker === true
+  inp(doSoftLog).checked = !!softOpts().openLog
+  inp(doSoftWasmBase).value = softOpts().wasmBaseUrl || ''
+  doSoftDecode.value = opts.softDecodeMode === false ? 'false' : opts.softDecodeMode === true ? 'true' : 'auto'
 
   inp(doUrl).onchange = function () { updateOpts('url', this.value, 'string') }
   inp(doAutoplay).onchange = function () { updateOpts('autoplay', this.checked) }
@@ -271,6 +341,13 @@ window.onload = function () {
   inp(doMaxLatency).onchange = function () { updateOpts('maxLatency', this.value, 'number') }
   inp(doDisconnectTime).onchange = function () { updateOpts('disconnectTime', this.value, 'number') }
   inp(doMaxReaderInterval).onchange = function () { updateOpts('maxReaderInterval', this.value, 'number') }
+
+  doSoftDecode.onchange = function () {
+    updateOpts('softDecodeMode', this.value === 'true' ? true : this.value === 'false' ? false : 'auto')
+  }
+  inp(doSoftWorker).onchange = function () { updateSoftDecodeOptions({ worker: this.checked }) }
+  inp(doSoftLog).onchange = function () { updateSoftDecodeOptions({ openLog: this.checked }) }
+  inp(doSoftWasmBase).onchange = function () { updateSoftDecodeOptions({ wasmBaseUrl: this.value }) }
 
   setTimeout(() => {
     initPlayer()
@@ -298,6 +375,16 @@ window.onload = function () {
     time = Number(time)
     if (isNaN(time)) return
     player.seek(time)
+  }
+
+  dbForceSoft.onclick = function () {
+    if (!player || typeof player.forceSoftDecode !== 'function') {
+      window.alert('当前播放器没有可用的内置软解（软解模式为只用硬解，或未注册软解包）')
+      return
+    }
+    player.forceSoftDecode('manual').then(function (sink) {
+      console.log('[soft-decode] switched', !!sink)
+    })
   }
 
   dTestPoint.onchange = function () {
@@ -337,6 +424,22 @@ window.onload = function () {
         dsSpeed.innerHTML =
           '<p>当前速度：' + Math.round(sp.speed / (8 * 1024)) + 'KB/s</p>' +
           '<p>平均速度：' + Math.round(sp.avgSpeed / (8 * 1024)) + 'KB/s</p>'
+
+        var sd = flv.isSoftDecoding ? flv.softDecodeStats : null
+        var media = player.media || {}
+        dsDecode.innerHTML =
+          '<p>解码方式：' + (flv.isSoftDecoding ? 'wasm 软解' : '浏览器硬解 MSE') + '</p>' +
+          '<p>播放状态：' + (media.paused ? 'paused' : 'playing') +
+            ' / readyState=' + media.readyState +
+            ' / ' + (media.videoWidth || 0) + 'x' + (media.videoHeight || 0) +
+            ' / src=' + String(media.currentSrc || media.src || '').slice(0, 24) + '</p>' +
+          (sd
+            ? '<p>wasm 变体：' + (sd.variant || '-') + '</p>' +
+              '<p>解码帧：' + sd.decoded + '</p>' +
+              '<p>渲染帧：' + sd.rendered + '</p>' +
+              '<p>丢弃帧：' + sd.dropped + '</p>' +
+              '<p>队列：' + sd.queue + '</p>'
+            : '')
 
       }
     }, 1000)

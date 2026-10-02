@@ -1,7 +1,8 @@
+import * as codec from './codec'
 import * as flv from './flv'
-import * as mpegTs from './mpeg-ts'
-import * as mp4 from './mp4'
 import * as model from './model'
+import * as mp4 from './mp4'
+import * as mpegTs from './mpeg-ts'
 import { BitReader, ByteReader, Logger } from './utils'
 
 export default {
@@ -9,6 +10,7 @@ export default {
   ...mpegTs,
   ...mp4,
   ...model,
+  ...codec,
   Logger,
   BitReader,
   ByteReader

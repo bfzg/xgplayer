@@ -1,28 +1,33 @@
 import EventEmitter from 'eventemitter3'
 import {
-  NetLoader,
-  Buffer,
-  MSE,
-  EVENT,
-  StreamingError,
   BandwidthService,
-  SeiService,
+  Buffer,
+  EVENT,
   GapService,
-  MediaStatsService,
+  getVideoPlaybackQuality,
   isMediaPlaying,
   Logger,
-  getVideoPlaybackQuality
+  MediaStatsService,
+  MSE,
+  NetLoader,
+  SeiService,
+  StreamingError
 } from 'xgplayer-streaming-shared'
 import { Logger as TransmuxerLogger } from 'xgplayer-transmuxer'
-import { BufferService } from './services'
 import { getOption } from './options'
+import { BufferService } from './services'
+import { TRANSFER_EVENT, TransferCost } from './services/transfer-cost'
 import { searchKeyframeIndex } from './utils'
-import { TransferCost, TRANSFER_EVENT } from './services/transfer-cost'
 
 export const logger = new Logger('flv')
 
+const noop = () => {}
+
 const MAX_HOLE = 0.1
 const MAX_START_GAP = 0.3
+
+/** Rate changes below this are ignored, keeps the catch-up controller quiet */
+const RATE_EPS = 1e-4
 
 /**
  * @typedef {import("../../../xgplayer-streaming-shared/es/services/stats").StatsInfo} Stats
@@ -58,17 +63,32 @@ export class Flv extends EventEmitter {
   _disconnectRetryCount = 0
   _preLoadEndPoint = 0
 
+  /** Rate the app asked for, kept apart from the live catch-up multiplier */
+  _userPlaybackRate = 1
+
+  /** Last rate written by this class; lets us tell our own writes from the app's */
+  _appliedCatchUpRate = null
+
   _keyframes = null
   _acceptRanges = true
 
   /**
+   * Serializes `_onProgress` handling. The streaming loader invokes the
+   * callback without awaiting it, so two in-flight chunks would otherwise
+   * demux into the same (reused) track objects concurrently and lose data.
+   */
+  _progressChain = Promise.resolve()
+  _progressToken = 0
+
+  /**
    * @param {import('./options').FlvOption} opts
    */
-  constructor (opts) {
+  constructor(opts) {
     super()
     this._opts = getOption(opts)
     this.media = this._opts.media || document.createElement('video')
     this._opts.media = null
+    this._userPlaybackRate = this.media.playbackRate || 1
     this._firstProgressEmit = false
     this._mediaLoader = new NetLoader({
       ...this._opts.fetchOptions,
@@ -83,11 +103,14 @@ export class Flv extends EventEmitter {
     this._disconnectRetryCount = this._opts.disconnectRetryCount
     this._transferCost = new TransferCost()
 
-    this._bufferService = new BufferService(
-      this,
-      this._opts.softDecode ? this.media : undefined,
-      this._opts
-    )
+    // `softDecode` keeps its legacy meaning: an external soft-decoding media
+    // element (`MVideo`) receives the demuxed tracks directly. The built-in
+    // wasm soft sink is driven by `softDecodeMode` instead, so both can coexist.
+    const softVideo = this._opts.softDecode ? this.media : undefined
+    this._bufferService = new BufferService(this, softVideo, {
+      ...this._opts,
+      softDecode: this._opts.softDecodeMode || false
+    })
     this._seiService = new SeiService(this)
     this._bandwidthService = new BandwidthService({
       chunkCountForSpeed: this._opts.chunkCountForSpeed,
@@ -106,35 +129,78 @@ export class Flv extends EventEmitter {
     this.media.addEventListener('timeupdate', this._onTimeupdate)
     this.media.addEventListener('progress', this._onBufferUpdate)
     this.media.addEventListener('waiting', this._onWaiting)
+    this.media.addEventListener('ratechange', this._onRatechange)
 
     this.on(EVENT.FLV_SCRIPT_DATA, this._onFlvScriptData)
   }
 
-  get version () {
+  get version() {
     return __VERSION__
   }
 
-  get isLive () {
+  get isLive() {
     return this._opts.isLive
   }
 
-  get baseDts () {
+  /**
+   * Playback rate requested by the app, without the live catch-up multiplier.
+   * @returns {number}
+   */
+  get userPlaybackRate() {
+    return this._userPlaybackRate
+  }
+
+  /**
+   * Live latency in seconds, end of the buffered range minus the playhead.
+   * @returns {number}
+   */
+  get latency() {
+    if (!this.media || !this.isLive) return 0
+    return Math.max(0, Buffer.end(Buffer.get(this.media)) - this.media.currentTime)
+  }
+
+  get baseDts() {
     return this._bufferService?.baseDts
   }
 
-  get seekable () {
+  get seekable() {
     return !!this._keyframes && this._acceptRanges
   }
 
-  get loader () {
+  get loader() {
     return this._mediaLoader
   }
 
-  get blobUrl () {
+  get blobUrl() {
     return this._bufferService?.blobUrl
   }
 
-  speedInfo () {
+  /** Whether pictures are currently produced by software decoding. */
+  get isSoftDecoding() {
+    return !!this._bufferService?.isSoftDecoding
+  }
+
+  /**
+   * Live software-decode counters, or null while the MSE sink is active.
+   * @returns {{decoded: number, rendered: number, dropped: number, queue: number, variant?: string}|null}
+   */
+  get softDecodeStats() {
+    if (!this._bufferService?.isSoftDecoding) return null
+    return this._bufferService?.sink?.stats || null
+  }
+
+  /**
+   * Switch to software decoding at runtime (`lowdecode`, manual degradation).
+   * No-op when no soft sink factory was configured.
+   * @param {string} [reason]
+   * @param {object} [info]
+   * @returns {Promise<any>}
+   */
+  fallbackToSoft(reason, info) {
+    return this._bufferService?.fallbackToSoft(reason, info)
+  }
+
+  speedInfo() {
     return {
       speed: this._bandwidthService.getLatestSpeed(),
       avgSpeed: this._bandwidthService.getAvgSpeed(),
@@ -146,15 +212,15 @@ export class Flv extends EventEmitter {
   /**
    * @returns {Stats}
    */
-  getStats () {
+  getStats() {
     return this._stats.getStats()
   }
 
-  bufferInfo (maxHole = MAX_HOLE) {
+  bufferInfo(maxHole = MAX_HOLE) {
     return Buffer.info(Buffer.get(this.media), this.media?.currentTime, maxHole)
   }
 
-  playbackQuality () {
+  playbackQuality() {
     return getVideoPlaybackQuality(this.media)
   }
 
@@ -163,18 +229,22 @@ export class Flv extends EventEmitter {
    * @param {string} [url]
    * @return {Promise}
    */
-  async load (url, reuseMse = false, streamRes) {
+  async load(url, reuseMse = false, streamRes) {
     if (!this._bufferService) return
     await this._reset(reuseMse)
 
-    this._loadData(url, this._opts.isLive ? [] : [0, this._opts.defaultVodLoadSize], streamRes)
+    this._loadData(
+      url,
+      this._opts.isLive ? [] : [0, this._opts.defaultVodLoadSize],
+      streamRes
+    )
 
     clearTimeout(this._tickTimer)
     this._tickTimer = setTimeout(this._tick, this._tickInterval)
   }
 
   /** @return {Promise} */
-  async replay (seamlesslyReload = this._opts.seamlesslyReload, isPlayEmit) {
+  async replay(seamlesslyReload = this._opts.seamlesslyReload, isPlayEmit) {
     if (!this.media) return
 
     this._resetDisconnectCount()
@@ -193,7 +263,7 @@ export class Flv extends EventEmitter {
     return this.media.play(!isPlayEmit).catch(() => {})
   }
 
-  disconnect () {
+  disconnect() {
     logger.debug('disconnect!')
     this._bufferService?.resetSeamlessSwitchStats()
     return this._clear()
@@ -203,7 +273,7 @@ export class Flv extends EventEmitter {
    * @param {string} url
    * @param {boolean} [seamless=false]
    */
-  async switchURL (url, seamless) {
+  async switchURL(url, seamless) {
     if (!this._bufferService) return
 
     this._resetDisconnectCount()
@@ -237,7 +307,7 @@ export class Flv extends EventEmitter {
   }
 
   /** @return {Promise} */
-  async destroy () {
+  async destroy() {
     if (!this.media) return
     this.removeAllListeners()
     this._seiService.reset()
@@ -247,6 +317,7 @@ export class Flv extends EventEmitter {
     this.media.removeEventListener('timeupdate', this._onTimeupdate)
     this.media.removeEventListener('waiting', this._onWaiting)
     this.media.removeEventListener('progress', this._onBufferUpdate)
+    this.media.removeEventListener('ratechange', this._onRatechange)
     await Promise.all([this._clear(), this._bufferService.destroy()])
     this.media = null
     this._bufferService = null
@@ -256,7 +327,7 @@ export class Flv extends EventEmitter {
    * @param {('video'|'audio')?} mediaType
    * @returns {Boolean}
    */
-  static isSupported (mediaType) {
+  static isSupported(mediaType) {
     if (!mediaType || mediaType === 'video' || mediaType === 'audio') {
       return MSE.isSupported()
     }
@@ -264,17 +335,17 @@ export class Flv extends EventEmitter {
     return typeof WebAssembly !== 'undefined'
   }
 
-  static enableLogger () {
+  static enableLogger() {
     Logger.enable()
     TransmuxerLogger.enable()
   }
 
-  static disableLogger () {
+  static disableLogger() {
     Logger.disable()
     TransmuxerLogger.disable()
   }
 
-  _emitError (error, endOfStream = true) {
+  _emitError(error, endOfStream = true) {
     logger.table(error)
     logger.error(error)
     logger.error(this.media?.error)
@@ -290,7 +361,7 @@ export class Flv extends EventEmitter {
     }
   }
 
-  async _reset (reuseMse = false) {
+  async _reset(reuseMse = false) {
     this._seiService.reset()
     this._bandwidthService.reset()
     this._stats.reset()
@@ -298,7 +369,7 @@ export class Flv extends EventEmitter {
     await this._bufferService.reset(reuseMse)
   }
 
-  async _loadData (url, range, streamRes) {
+  async _loadData(url, range, streamRes) {
     if (url) this._opts.url = url
     let finnalUrl = (url = this._opts.url)
     if (!url) throw new Error('Source url is missing')
@@ -322,7 +393,12 @@ export class Flv extends EventEmitter {
 
     this._loading = true
     try {
-      await this._mediaLoader.load({ url: finnalUrl, range, streamRes, firstMaxChunkSize: this._opts.firstMaxChunkSize })
+      await this._mediaLoader.load({
+        url: finnalUrl,
+        range,
+        streamRes,
+        firstMaxChunkSize: this._opts.firstMaxChunkSize
+      })
     } catch (error) {
       this._loading = false
       return this._emitError(StreamingError.network(error), false)
@@ -340,12 +416,25 @@ export class Flv extends EventEmitter {
    * firstByteTime: 首字节响应时间
    * @param {Response} response
    */
-  _onProgress = async (
+  _onProgress = (chunk, done, info, response) => {
+    // The loader fires progress callbacks without awaiting them, so enqueue
+    // the real handler to guarantee chunks are demuxed/appended in order.
+    const token = this._progressToken
+    const run = () => {
+      if (token !== this._progressToken) return undefined
+      return this._handleProgress(chunk, done, info, response)
+    }
+    const next = this._progressChain.then(run, run)
+    this._progressChain = next.then(noop, noop)
+    return next
+  }
+
+  async _handleProgress(
     chunk,
     done,
     { startTime, endTime, st, firstByteTime },
     response
-  ) => {
+  ) {
     this._loading = !done
     if (!this._firstProgressEmit) {
       if (!this.media) {
@@ -433,12 +522,14 @@ export class Flv extends EventEmitter {
     })
   }
 
-  async _clear () {
+  async _clear() {
     if (this._mediaLoader) await this._mediaLoader.cancel()
     clearTimeout(this._maxChunkWaitTimer)
     clearTimeout(this._tickTimer)
     this._loading = false
     this._firstProgressEmit = false
+    // Drop queued progress work from the previous load.
+    this._progressToken++
   }
 
   _end = () => {
@@ -480,7 +571,11 @@ export class Flv extends EventEmitter {
         }
         return
       }
-      if (opts.isLive && media.readyState === 4 && (bufferEnd - media.currentTime) > opts.disconnectTime) {
+      if (
+        opts.isLive &&
+        media.readyState === 4 &&
+        bufferEnd - media.currentTime > opts.disconnectTime
+      ) {
         this.disconnect()
       }
     }
@@ -505,7 +600,7 @@ export class Flv extends EventEmitter {
     if (this.isLive && !this._opts.mseLowLatency) {
       // update duration to Infinity
       if (this.media.duration !== Infinity) {
-        this._bufferService.updateDuration(Infinity).catch(e => {})
+        this._bufferService.updateDuration(Infinity).catch((e) => {})
       }
     }
   }
@@ -523,15 +618,20 @@ export class Flv extends EventEmitter {
     const opts = this._opts
     const currentTime = this.media.currentTime
 
-    if (opts.isLive && opts.maxLatency && opts.targetLatency) {
+    if (opts.isLive && opts.targetLatency) {
       const bufferEnd = Buffer.end(Buffer.get(this.media))
       const latency = bufferEnd - currentTime
-      if (latency >= opts.maxLatency) {
-        this.media.currentTime = bufferEnd - opts.targetLatency
-        this.emit(EVENT.CHASEFRAME, {
-          currentTime: this.media.currentTime,
-          latency: opts.targetLatency
-        })
+      if (latency > 0) {
+        if (opts.maxLatency && latency >= opts.maxLatency) {
+          this.media.currentTime = bufferEnd - opts.targetLatency
+          this._applyLiveCatchUp(0)
+          this.emit(EVENT.CHASEFRAME, {
+            currentTime: this.media.currentTime,
+            latency: opts.targetLatency
+          })
+        } else if (opts.liveCatchUp) {
+          this._applyLiveCatchUp(latency)
+        }
       }
     }
     this._seiService.throw(currentTime, true)
@@ -539,6 +639,70 @@ export class Flv extends EventEmitter {
     if (opts.isLive || !this.seekable || this._loading) return
 
     this._checkPreload()
+  }
+
+  /**
+   * The app owns the playback rate; the catch-up multiplier borrows it. Anything
+   * written to the element that differs from our last write is treated as the
+   * rate the app asked for.
+   * @returns {number}
+   */
+  _syncUserPlaybackRate() {
+    if (!this.media) return this._userPlaybackRate
+    const rate = this.media.playbackRate
+    if (!rate) return this._userPlaybackRate
+    if (
+      this._appliedCatchUpRate !== null &&
+      Math.abs(rate - this._appliedCatchUpRate) < RATE_EPS
+    ) {
+      return this._userPlaybackRate
+    }
+    if (Math.abs(rate - this._userPlaybackRate) > RATE_EPS) {
+      this._userPlaybackRate = rate
+      this._appliedCatchUpRate = null
+    }
+    return this._userPlaybackRate
+  }
+
+  _onRatechange = () => {
+    this._syncUserPlaybackRate()
+  }
+
+  /**
+   * Smooth live catch-up. Rather than waiting for `maxLatency` and then jumping,
+   * the playhead is pulled back to `targetLatency` by playing a little faster,
+   * so accumulated stall latency drains without a visible skip.
+   * @param {number} latency seconds behind the end of the buffered range
+   */
+  _applyLiveCatchUp(latency) {
+    if (!this.media || this.media.seeking) return
+
+    const opts = this._opts
+    const userRate = this._syncUserPlaybackRate()
+    const excess = latency - opts.targetLatency - opts.liveCatchUpBand
+    const extra =
+      excess > 0
+        ? Math.min(
+            Math.round((excess / opts.liveCatchUpTime) * 100) / 100,
+            opts.liveCatchUpRate
+          )
+        : 0
+    const rate = userRate * (1 + extra)
+
+    if (Math.abs(rate - this.media.playbackRate) < RATE_EPS) return
+
+    this._appliedCatchUpRate = rate
+    this.media.playbackRate = rate
+    logger.debug(
+      `live catch-up, latency=${latency.toFixed(2)}s, rate=${rate.toFixed(3)}x`
+    )
+    this.emit(EVENT.LIVE_CATCH_UP, {
+      latency,
+      targetLatency: opts.targetLatency,
+      userRate,
+      extra,
+      playbackRate: rate
+    })
   }
 
   _onWaiting = () => {
@@ -592,7 +756,7 @@ export class Flv extends EventEmitter {
     }
   }
 
-  _onFlvScriptData = sample => {
+  _onFlvScriptData = (sample) => {
     const keyframes = sample.data?.onMetaData?.keyframes
     const duration = sample.data?.onMetaData?.duration
     if (keyframes) {

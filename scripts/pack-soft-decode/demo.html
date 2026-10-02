@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>xgplayer HEVC 软解自检</title>
+  <!-- 空 favicon：省掉一条与播放无关的 404，免得干扰看控制台 -->
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./umd/xgplayer.min.css">
+  <style>
+    :root { --line: #d8dce1; --muted: #6b7280; --ink: #1f2328; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--ink); background: #f6f7f9; }
+    header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--line); }
+    h1 { font-size: 14px; margin: 0; font-weight: 600; }
+    .probe { display: flex; gap: 6px; margin-left: auto; }
+    .tag { padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; background: #f2f3f5; color: var(--muted); font-size: 12px; }
+    .tag.ok { background: #e8f5ec; border-color: #b7e0c4; color: #15703a; }
+    .tag.no { background: #fdecec; border-color: #f2c4c4; color: #a51e1e; }
+    .controls { display: grid; grid-template-columns: minmax(240px, 1fr) repeat(auto-fit, minmax(120px, max-content)); gap: 8px 10px; align-items: end; padding: 12px 16px; background: #fff; border-bottom: 1px solid var(--line); }
+    .field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .field > label { font-size: 11px; color: var(--muted); }
+    input, select { font: inherit; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); min-width: 0; }
+    input[type=checkbox] { width: 14px; height: 14px; padding: 0; }
+    .check { flex-direction: row; align-items: center; gap: 6px; }
+    .check > label { font-size: 13px; color: var(--ink); }
+    .actions { display: flex; gap: 8px; }
+    button { font: inherit; padding: 6px 14px; border: 1px solid var(--line); border-radius: 4px; background: #fff; cursor: pointer; }
+    button.primary { background: #1f2328; border-color: #1f2328; color: #fff; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 16px; align-items: start; }
+    @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+    #player { width: 100%; min-height: 400px; background: #000; border-radius: 6px; overflow: hidden; }
+    .panel { background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+    .panel + .panel { margin-top: 12px; }
+    .panel h2 { font-size: 11px; margin: 0; padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; color: var(--muted); text-transform: uppercase; }
+    dl { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 4px 8px; margin: 0; padding: 10px; }
+    dt { color: var(--muted); }
+    dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    #log { height: 180px; overflow: auto; margin: 0; padding: 8px 10px; font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>xgplayer HEVC 软解自检</h1>
+    <div class="probe" id="probe"></div>
+  </header>
+
+  <form class="controls" onsubmit="return false">
+    <div class="field">
+      <label for="url">播放地址</label>
+      <input id="url" type="text" placeholder="https://host/live/stream.flv 或 .../index.m3u8">
+    </div>
+    <div class="field">
+      <label for="fmt">封装</label>
+      <select id="fmt">
+        <option value="auto">自动</option>
+        <option value="hls">HLS</option>
+        <option value="flv">FLV</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="mode">解码</label>
+      <select id="mode">
+        <option value="auto">硬解优先，失败回退软解</option>
+        <option value="true">强制软解</option>
+        <option value="false">关闭软解</option>
+      </select>
+    </div>
+    <div class="field check">
+      <input id="live" type="checkbox">
+      <label for="live">直播</label>
+    </div>
+    <div class="field check">
+      <input id="muted" type="checkbox" checked>
+      <label for="muted">静音自动播放</label>
+    </div>
+    <div class="field">
+      <label for="preload">预缓冲 (s)</label>
+      <input id="preload" type="number" value="60" min="0" step="10" style="width:92px">
+    </div>
+    <div class="field">
+      <label for="wasm">wasm 基址</label>
+      <input id="wasm" type="text" value="./wasm">
+    </div>
+    <div class="field">
+      <label>&nbsp;</label>
+      <div class="actions">
+        <button class="primary" id="play">播放</button>
+        <button id="stop">停止</button>
+      </div>
+    </div>
+  </form>
+
+  <main>
+    <div id="player"></div>
+    <aside>
+      <section class="panel">
+        <h2>运行状态</h2>
+        <dl id="stats"></dl>
+      </section>
+      <section class="panel">
+        <h2>事件</h2>
+        <pre id="log"></pre>
+      </section>
+    </aside>
+  </main>
+
+  <script src="./umd/xgplayer.min.js"></script>
+  <script src="./umd/xgplayer-soft-decode.min.js"></script>
+  <script src="./umd/xgplayer-hls.min.js"></script>
+  <script src="./umd/xgplayer-flv.min.js"></script>
+  <script>
+    (function () {
+      var $ = function (id) { return document.getElementById(id) }
+      var player = null
+      var counters = { waiting: 0, stalled: 0 }
+      var lastTime = 0
+
+      function write (msg) {
+        $('log').textContent += '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n'
+        $('log').scrollTop = $('log').scrollHeight
+      }
+
+      // HEVC MSE support is what decides whether the wasm sink is needed.
+      function probe () {
+        var types = [
+          ['MP4 hvc1', 'video/mp4;codecs="hvc1.1.6.L93.B0"'],
+          ['MP4 hev1', 'video/mp4;codecs="hev1.1.6.L93.B0"'],
+          ['TS hev1', 'video/mp2t;codecs="hev1.1.6.L93.B0"']
+        ]
+        var html = ''
+        types.forEach(function (item) {
+          var ok = false
+          try { ok = !!(window.MediaSource && MediaSource.isTypeSupported(item[1])) } catch (e) { ok = false }
+          html += '<span class="tag ' + (ok ? 'ok' : 'no') + '">' + item[0] + ' ' + (ok ? '硬解' : '不支持') + '</span>'
+        })
+        $('probe').innerHTML = html
+      }
+
+      function fmtTime (sec) {
+        if (!isFinite(sec) || sec <= 0) return '00:00'
+        var m = Math.floor(sec / 60); var s = Math.floor(sec % 60)
+        return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s
+      }
+
+      function rows (data) {
+        return data.map(function (row) {
+          var value = row[1]
+          var text = (value === null || value === undefined || value === '') ? '-' : value
+          return '<dt>' + row[0] + '</dt><dd>' + text + '</dd>'
+        }).join('')
+      }
+
+      function core () {
+        if (!player || !player.plugins) return null
+        var hls = player.plugins.hls && player.plugins.hls.core
+        var flv = player.plugins.flv && player.plugins.flv.core
+        return hls || flv || null
+      }
+
+      function tick () {
+        if (!player || !player.video) return
+        var c = core(); var video = player.video
+        var soft = !!(c && c.isSoftDecoding)
+        var st = c && c.softDecodeStats
+        var ranges = []
+        try {
+          for (var i = 0; i < video.buffered.length; i++) ranges.push(fmtTime(video.buffered.start(i)) + '-' + fmtTime(video.buffered.end(i)))
+        } catch (e) { /* destroyed mid-tick */ }
+        $('stats').innerHTML = rows([
+          ['解码方式', soft ? 'wasm 软解' : '浏览器硬解 (MSE)'],
+          ['wasm 变体', st && st.variant],
+          ['已解码', st && st.decoded],
+          ['已渲染', st && st.rendered],
+          ['丢帧', st && st.dropped],
+          ['帧队列', st && st.queue],
+          ['待发包', st && st.pending],
+          ['播放时间', fmtTime(video.currentTime) + ' / ' + fmtTime(video.duration)],
+          ['缓冲区间', ranges.length ? ranges.slice(0, 3).join(' ') + (ranges.length > 3 ? ' …' : '') : '空'],
+          ['waiting', counters.waiting],
+          ['卡顿', counters.stalled]
+        ])
+      }
+
+      // A frozen playhead is the failure mode worth surfacing on this page.
+      function watchStall () {
+        setInterval(function () {
+          if (!player || !player.video) return
+          var t = player.video.currentTime
+          if (!player.video.paused && t > 0.5 && Math.abs(t - lastTime) < 0.05) counters.stalled++
+          lastTime = t
+        }, 2000)
+      }
+
+      function detectFmt (url) {
+        if (/\.m3u8(\?|#|$)/i.test(url)) return 'hls'
+        if (/\.flv(\?|#|$)/i.test(url)) return 'flv'
+        return ''
+      }
+
+      function destroy () {
+        if (player) { try { player.destroy() } catch (e) { /* already gone */ } player = null }
+        $('stats').innerHTML = ''
+      }
+
+      function build () {
+        var url = $('url').value.trim()
+        if (!url) { write('请填写播放地址'); return }
+        var fmt = $('fmt').value === 'auto' ? detectFmt(url) : $('fmt').value
+        if (!fmt) { write('无法从地址判断封装格式，请手动选择 HLS / FLV'); return }
+        destroy()
+        var preload = Number($('preload').value || 0)
+        var mode = $('mode').value
+        var config = {
+          id: 'player',
+          url: url,
+          isLive: $('live').checked,
+          autoplay: true,
+          autoplayMuted: $('muted').checked,
+          plugins: [fmt === 'hls' ? window.HlsPlayer : window.FlvPlayer],
+          softDecode: mode === 'auto' ? 'auto' : mode === 'true',
+          softDecodeOptions: { wasmBaseUrl: $('wasm').value.trim() || './wasm' },
+          onSoftDecodeFallback: function (info) {
+            write('回退软解: ' + (info && (info.reason || JSON.stringify(info))))
+          }
+        }
+        config[fmt] = preload ? { preloadTime: preload } : {}
+        write('创建播放器 [' + fmt + '] softDecode=' + JSON.stringify(config.softDecode))
+        player = new window.Player(config)
+        // 便于排查问题时在控制台访问实例
+        window.player = player
+        counters = { waiting: 0, stalled: 0 }; lastTime = 0
+        player.on('waiting', function () { counters.waiting++ })
+        player.on('canplay', function () { write('canplay') })
+        player.on('playing', function () { write('playing') })
+        player.on('error', function (e) { write('error: ' + (e && (e.message || JSON.stringify(e)))) })
+      }
+
+      $('play').onclick = build
+      $('stop').onclick = destroy
+      probe(); watchStall(); setInterval(tick, 500)
+      var q = new URLSearchParams(location.search)
+      if (q.get('url')) { $('url').value = q.get('url'); if (q.get('autoplay') !== 'false') build() }
+    })()
+  </script>
+</body>
+
+</html>

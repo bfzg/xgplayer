@@ -23,8 +23,9 @@ module.exports = {
   collectCoverageFrom: [
     'packages/xgplayer-dash/src/**/*.js',
     'packages/xgplayer-flv/src/**/*.js',
-    'packages/xgplayer-hls/src/**/*.{js,ts}',
-    'packages/xgplayer-transmuxer/src/**/*.{js,ts}',
+    'packages/xgplayer-hls/src/**/*.js',
+    'packages/xgplayer-transmuxer/src/**/*.js',
+    'packages/xgplayer-soft-decode/src/**/*.js',
     'packages/xgplayer-cast/src/**/*.js',
     '!**/node_modules/**'
   ],
@@ -33,13 +34,20 @@ module.exports = {
   // coverageDirectory: undefined,
 
   // An array of regexp pattern strings used to skip coverage collection
-  coveragePathIgnorePatterns: ['/node_modules/', 'index.umd.js'],
+  coveragePathIgnorePatterns: [
+    '/node_modules/',
+    'index.umd.js'
+  ],
 
   // Indicates which provider should be used to instrument code for coverage
   coverageProvider: 'v8',
 
   // A list of reporter names that Jest uses when writing coverage reports
-  coverageReporters: ['text', 'lcov', 'clover'],
+  coverageReporters: [
+    'text',
+    'lcov',
+    'clover'
+  ],
 
   // An object that configures minimum threshold enforcement for coverage results
   // coverageThreshold: undefined,
@@ -66,7 +74,9 @@ module.exports = {
   // maxWorkers: "50%",
 
   // An array of directory names to be searched recursively up from the requiring module's location
-  moduleDirectories: ['node_modules'],
+  moduleDirectories: [
+    'node_modules'
+  ],
 
   // An array of file extensions your modules use
   // moduleFileExtensions: [
@@ -82,13 +92,25 @@ module.exports = {
   moduleNameMapper: {
     'xgplayer-streaming-shared': '<rootDir>/packages/xgplayer-streaming-shared/src/',
     'xgplayer-transmuxer': '<rootDir>/packages/xgplayer-transmuxer/src/',
-    xgplayer: '<rootDir>/packages/xgplayer/src/',
+    'xgplayer-soft-decode': '<rootDir>/packages/xgplayer-soft-decode/src/',
+    'xgplayer': '<rootDir>/packages/xgplayer/src/',
+    // @libmedia/cheap is dual published and its ESM half is untransformed
+    // JavaScript, which jsdom's module conditions would load as CommonJS.
+    // Pointing at the CJS build keeps jest honest without touching the browser
+    // resolution the library itself relies on.
+    '^@libmedia/cheap$': '<rootDir>/node_modules/@libmedia/cheap/dist/cjs/index.cjs',
+    '^@libmedia/cheap/internal$': '<rootDir>/node_modules/@libmedia/cheap/dist/cjs/internal.cjs',
     '\\.(jpg|jpeg|png|gif|webp|svg)$': '<rootDir>/__mocks__/fileMock.js',
     '\\.(css|scss)$': '<rootDir>/__mocks__/styleMock.js'
   },
 
   // An array of regexp pattern strings, matched against all module paths before considered 'visible' to the module loader
-  // modulePathIgnorePatterns: [],
+  // The staged copy-and-use bundle under release/ repeats every package
+  // manifest, so jest's haste map reports naming collisions against the real
+  // sources. It is build output and must not be treated as a module root.
+  modulePathIgnorePatterns: [
+    '<rootDir>/release/'
+  ],
 
   // Activates notifications for test results
   // notify: false,
@@ -155,7 +177,8 @@ module.exports = {
     '**/packages/xgplayer-streaming-shared/__tests__/**/*.(spec|test).js',
     '**/packages/xgplayer-subtitles/__tests__/**/*.(spec|test).js',
     '**/packages/xgplayer-transmuxer/__tests__/**/*.(spec|test).js',
-    '**/packages/xgplayer-cast/__tests__/**/*.(spec|test).js'
+    '**/packages/xgplayer-cast/__tests__/**/*.(spec|test).js',
+    '**/packages/xgplayer-soft-decode/__tests__/**/*.(spec|test).js'
   ],
 
   // An array of regexp pattern strings that are matched against all test paths, matched tests are skipped
@@ -180,21 +203,18 @@ module.exports = {
 
   // A map from regular expressions to paths to transformers
   transform: {
-    '\\.[jt]sx?$': [
-      'babel-jest',
-      {
-        presets: [
-          ['@babel/preset-env', { targets: { node: 'current' } }],
-          '@babel/preset-typescript'
-        ]
-      }
-    ]
+    '\\.[jt]sx?$': ['babel-jest', {
+      presets: [
+        ['@babel/preset-env', { targets: { node: 'current' } }],
+        '@babel/preset-typescript'
+      ]
+    }]
   },
 
   // An array of regexp pattern strings that are matched against all source file paths, matched files will skip transformation
   transformIgnorePatterns: [
     'node_modules/(?!crypto-es/.*)'
-    //   "\\.pnp\\.[^\\/]+$"
+  //   "\\.pnp\\.[^\\/]+$"
   ]
 
   // An array of regexp pattern strings that are matched against all modules before the module loader will automatically return a mock for them

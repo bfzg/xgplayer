@@ -129,6 +129,11 @@ async function getBuildConfig (isDev, cfg = {}, isEs) {
     resolve: {
       alias
     },
+    // The wasm soft-decode package pulls in @libmedia, whose ESM build uses
+    // BigInt literals for pts/dts. Vite pre-bundles dependencies with
+    // build.target ("modules", i.e. es2019) and esbuild cannot downlevel BigInt
+    // syntax, so the optimizer needs a higher target than the app itself.
+    optimizeDeps: isDev ? { esbuildOptions: { target: 'es2020' } } : undefined,
     css: {
       preprocessorOptions: cssOpts,
       postcss: isDev ? undefined : { plugins: [require('autoprefixer')()] }
@@ -137,7 +142,11 @@ async function getBuildConfig (isDev, cfg = {}, isEs) {
       polyfillModulePreload: false,
       reportCompressedSize: false,
       emptyOutDir: false,
-      assetsInlineLimit: 81920
+      assetsInlineLimit: 81920,
+      // Packages whose dependencies ship BigInt literals (wasm glue) need
+      // buildTarget: 'es2020' in their `libd` config, because esbuild cannot
+      // downlevel BigInt below es2020 and vite defaults to 'modules'.
+      target: cfg.buildTarget
     },
     plugins: [
       {
