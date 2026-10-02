@@ -123,7 +123,7 @@ hls 把 `flv` 换成 `hls`。
 
 ## 运行 Demo
 
-克隆仓库后可直接运行演示页：
+克隆仓库后可直接运行演示页（无需额外下载）：
 
 ```bash
 # 1. 安装依赖（首次）
@@ -132,16 +132,16 @@ yarn
 # 2. 构建所有包
 yarn build:all
 
-# 3. 进入 demo 目录启动 HTTP 服务
+# 3. 启动 demo（自动拷贝 JS + 下载 wasm）
 cd demo
 bash start.sh
-# 浏览器打开 http://127.0.0.1:8080
+# 浏览器打开 http://127.0.0.1:8080/demo/index.html
 ```
 
 演示页支持 FLV / HLS 播放，可在界面切换硬解/软解模式，实时查看解码状态。
 
-> **注意**：wasm 软解文件默认从 CDN 加载（jsDelivr），首次播放时自动下载。
-> 如需离线使用，可在浏览器地址栏加 `?wasmBaseUrl=./wasm` 并自行放置 wasm 文件到 `demo/wasm/decode/` 目录。
+> wasm 文件由 `start.sh` 自动从 libmedia 官方仓库下载到 `demo/wasm/decode/`，支持离线使用。
+> 也可以单独执行 `bash scripts/download-wasm.sh` 手动下载 wasm。
 
 ---
 

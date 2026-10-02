@@ -98,3 +98,6 @@ examples/
 
 # demo build artifacts (copied from packages/*/dist/)
 demo/umd/
+
+# demo wasm binaries (auto-downloaded by start.sh)
+demo/wasm/

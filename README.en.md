@@ -120,7 +120,7 @@ For HLS replace `flv` with `hls`.
 
 ## Run Demo
 
-Clone the repo and run the demo page:
+Clone the repo and run the demo page (no manual download needed):
 
 ```bash
 # 1. Install dependencies
@@ -129,16 +129,15 @@ yarn
 # 2. Build all packages
 yarn build:all
 
-# 3. Start demo HTTP server
+# 3. Start demo (auto-copy JS + auto-download wasm)
 cd demo
 bash start.sh
-# Open http://127.0.0.1:8080 in browser
+# Open http://127.0.0.1:8080/demo/index.html in browser
 ```
 
 The demo supports FLV / HLS playback with hardware/software decode switching and real-time status display.
 
-> **Note**: wasm binaries are loaded from CDN (jsDelivr) by default on first playback.
-> For offline use, add `?wasmBaseUrl=./wasm` to the URL and place wasm files under `demo/wasm/decode/`.
+> Wasm files are auto-downloaded by `start.sh` from the libmedia release to `demo/wasm/decode/`, ready for offline use.
 
 ---
 
