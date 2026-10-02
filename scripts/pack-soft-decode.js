@@ -157,7 +157,8 @@ function main () {
     log(`wasm: ${copied} binaries from ${wasmRoot} -> ${path.relative(ROOT, decodeOut)}/ (${sizeMb(dirBytes(decodeOut))})`)
   }
 
-  for (const doc of ['README.md', 'demo.html']) {
+  // README, self-check page and the optional lazy loader ship from the template dir.
+  for (const doc of ['README.md', 'demo.html', 'loader.js']) {
     fs.copyFileSync(path.join(templateDir, doc), path.join(outDir, doc))
   }
 
