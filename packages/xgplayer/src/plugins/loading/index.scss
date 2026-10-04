@@ -68,3 +68,11 @@ xg-loading-inner {
     display: none;
   }
 }
+
+// 起播阶段 root 上 is-enter 与 isloading 并存，权重需高于上面的隐藏规则，
+// 否则拉流/解码首帧期间转圈出不来
+.xgplayer-is-enter.xgplayer-isloading {
+  .xgplayer-loading{
+    display: block;
+  }
+}

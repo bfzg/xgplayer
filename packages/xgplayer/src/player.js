@@ -667,6 +667,11 @@ class Player extends MediaProxy {
     if (readyState >= 2 && this.duration > 0) {
       this.canPlayFunc()
     } else {
+      // 起播阶段视频还没进入播放态，浏览器不会触发 waiting，需要主动置上 loading 态；
+      // enter 层自带起播转圈，仅在未挂载 enter 插件时接管，避免两个转圈叠加
+      if (this.config.autoplay && !this.plugins.enter) {
+        this.addClass(STATE_CLASS.LOADING)
+      }
       this.on(Events.CANPLAY, this.canPlayFunc)
     }
     if (!this.hasStart || this.state < STATES.ATTACHED) {
@@ -1056,7 +1061,13 @@ class Player extends MediaProxy {
     }
     if (this.state < STATES.RUNNING) {
       this.removeClass(STATE_CLASS.NO_START)
-      !this.isCanplay && this.addClass(STATE_CLASS.ENTER)
+      if (!this.isCanplay) {
+        this.addClass(STATE_CLASS.ENTER)
+        // 手动起播同样需要在 canplay 之前给出缓冲提示
+        if (!this.plugins.enter) {
+          this.addClass(STATE_CLASS.LOADING)
+        }
+      }
     }
     const playPromise = super.play()
     if (playPromise !== undefined && playPromise && playPromise.then) {
