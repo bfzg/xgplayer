@@ -23,7 +23,7 @@ import 'xgplayer-soft-decode' // import 即注册全局，之后 softDecode 默�
 new Player({
   url: 'https://example.com/live/stream.flv',
   isLive: true,
-  // 'auto' 探测回退（默认）/ true 强制软解 / false 彻底关闭
+  // 'auto' 探测回退（默认）/ true 强制软解（只对本包有解码后端的编码，目前即 HEVC）/ false 彻底关闭
   softDecode: 'auto',
   softDecodeOptions: {
     wasmBaseUrl: '/wasm', // 指向包含 decode/ 的那一层，内网部署必须自托管
@@ -31,6 +31,7 @@ new Player({
   },
   onSoftDecodeFallback (info) {
     // { reason, from: 'mse', to: 'soft', codec, width, height, message }
+    // 拒绝切换时：{ declined: true, from: 'mse', to: 'mse', codec, message }
     console.log('已回退软解', info.reason)
   }
 })
@@ -51,12 +52,22 @@ UMD：
 ## 回退是怎么发生的
 
 1. 起流时读 `videoTrack.codec`，是 HEVC 且 `MediaSource.isTypeSupported` 为否 → 切软解。
-2. 已选中的 sink 在 append 或解码阶段报错，`sinkManager.handleError` 同样切软解。
-3. 切过去之后，解封装出的 Annex-B 交给 `WasmVideoDecoder` 解码，YUV 帧按音频时钟投给 canvas，
+2. `softDecode: true`（强制）只对**本包有解码后端的编码**生效，也就是
+   `softDecodeCodecs`（默认 `['hevc']`）。H.264/AV1 等没有 wasm 后端的编码会保持原生 MSE，
+   并带 `declined: true` 走一次 `onSoftDecodeFallback`：否则元素会被换成只挂音频的
+   MSE、canvas 永远画不出画面，而且这个切换无法回退。判断在 `SinkManager.switchToSoft`
+   里通过工厂的 `canDecode()` 完成，**先问后切**，不会先把 MSE sink 销毁。
+3. 已选中的 sink 在 append 或解码阶段报错，`sinkManager.handleError` 同样切软解（同样受
+   `canDecode` 约束）。
+4. 切过去之后，解封装出的 Annex-B 交给 `WasmVideoDecoder` 解码，YUV 帧按音频时钟投给 canvas，
    迟到帧按 `lateFrameThreshold` 丢弃。
-4. AAC 经 `FMP4Remuxer` 打成音频-only MSE 挂在同一个 `<video>` 上，`currentTime` / `duration` /
+5. AAC 经 `FMP4Remuxer` 打成音频-only MSE 挂在同一个 `<video>` 上，`currentTime` / `duration` /
    `buffered` / seek / 倍速全部沿用原生语义，控件、进度、统计插件不受影响。
-5. 纯视频流会注入一条静音 AAC 轨维持时钟，所以无音频的 FLV 也能正常播。
+6. 纯视频流会注入一条静音 AAC 轨维持时钟，所以无音频的 FLV 也能正常播。
+
+> sink 切换是单向的：`auto`/强制切换发生后不会再自动切回 MSE。若一条流中途从 HEVC 变成
+> H.264，软解 sink 会记录一次 "no software decoder" 告警，但画面不会恢复，需要重载播放器。
+> 需要支持多编码混流时再加 `switchToMse()` 与逐分片的 `canDecode` 协商。
 
 ## 选项
 
@@ -74,6 +85,8 @@ UMD：
 | `maxFrameQueue` | `24` | 内存中保留的已解码帧数 |
 | `maxQueuedBytes` | `160 MiB` | 已解码帧字节上限，`0` 为不限 |
 | `maxPendingPackets` | `600` | 落后于时钟的压缩包上限，超出裁到最近关键帧 |
+| `timelineJumpThreshold` | `1` | 源自身时间戳与当前映射偏差超过该秒数即重建映射（见下） |
+| `softDecodeCodecs` | `['hevc']` | 本包能软解的编码族；只有这里的编码才会被强制切软解 |
 | `dropLateFrames` | `true` | 丢弃落后于音频时钟的帧 |
 | `lateFrameThreshold` | `0.12` | 迟到判定阈值（秒） |
 | `audioThrough` | `'mse-native'` | 音频解码方式，目前只有这一种 |
@@ -118,14 +131,35 @@ https://cdn.jsdelivr.net/gh/zhaohappy/libmedia@1.3.1/dist
 ```js
 player.plugins.flv.core.isSoftDecoding   // 当前是否处于软解，hls 同理
 player.plugins.flv.core.softDecodeStats  // { decoded, rendered, dropped, caughtUp, suppressed,
-                                         //   queue, pending, resyncing, decoder, variant }
-player.forceSoftDecode('自定义原因')        // 主动切软解
+                                         //   resyncAbandoned, timelineJumps, queue, pending,
+                                         //   resyncing, decoder, variant }
+player.forceSoftDecode('自定义原因')        // 主动切软解；编码没有软解后端时 resolve(null)
+player.plugins.flv.core.canSoftDecode('avc1.64001f')  // false，hls 同理；不传则用当前流的编码
 player.on('core.softdecodefallback', function (info) {})
 player.root.querySelector('.xgplayer-soft-decode-canvas')
 ```
 
 软解时 `<video>` 只挂音频轨，从 `video` 取像素的插件（`screenShot`、`dynamicBg`）会拿到黑帧，
 需要改从上面这块 canvas 取。
+
+## 时间轴对齐
+
+HLS 分片带的是源 mp4 自己的 `tfdt`，元素播的是播放列表位置，两者差值（`offset`）按分片算：
+视频压缩包加上它、音频 MSE 的 `timestampOffset` 设成它，所以 offset 是“每个分片一份”，不是挂在
+sink 上的全局量。这样预加载提前读到下一个文件时，不会挪动当前文件已经入队的画面。
+
+录像后端常常每个分片文件都从 0 重新计时（GB28181/NVR 的常见形态，m3u8 里表现为
+`EXT-X-DISCONTINUITY`），此时旧 offset 会把音频写到负数时间：`buffered` 永远到不了 seek 目标，
+seek 被弹回旧缓存末端，加载器只能一个分片一个分片地往前追。所以当某个分片自身时间戳与当前
+offset 的预期值相差超过 `timelineJumpThreshold` 秒时，offset 会按这个分片重建，正向、反向、
+跨文件 seek 都因此成立。`softDecodeStats.timelineJumps` 记录了重建次数。
+
+audio-output 里的静音轨也按源时间轴铺，所以 offset 变化时会重新从新分片的 span 起铺，
+避免为了跨文件而合成整段静音。
+
+向后 seek 会把时钟退回到已入队画面之前；陈旧包和已解码帧在时钟“后面”反而成了未来，
+`_trimPending` 和 `maxDecodeLead` 都不会清理它们，因此 sink 会在时钟后退时直接丢弃队列
+（日志 `clock moved back ...`）。
 
 ## 在本仓库里验证
 

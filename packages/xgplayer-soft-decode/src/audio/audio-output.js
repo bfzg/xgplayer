@@ -94,6 +94,12 @@ export class AudioOutput {
     const value = Math.abs(offset || 0) < 0.001 ? 0 : offset
     if (value === this._timeOffset) return
     this._timeOffset = value
+    // The silent clock is filled along the source's own timeline, so a new
+    // mapping (an HLS discontinuity, a new recording file) has to re-seed it
+    // from the next batch's span. Continuing from the old position instead
+    // would synthesise audio across the whole distance between the two files.
+    this._silentSeeded = false
+    this._silentPts = 0
     if (this._mse && this._sourceCreated) {
       this._mse.setTimeoffset(MSE.AUDIO, value, { source: 'soft-audio' })
     }

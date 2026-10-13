@@ -1,7 +1,10 @@
 import {
+  DEFAULT_SOFT_DECODE_CODECS,
   DEFAULT_SOFT_DECODE_OPTIONS,
+  codecFamilyOf,
   getSoftDecodeOptions,
-  exceedsSoftResolution
+  exceedsSoftResolution,
+  isSoftDecodableCodec
 } from 'xgplayer-soft-decode'
 
 describe('getSoftDecodeOptions', () => {
@@ -32,6 +35,52 @@ describe('getSoftDecodeOptions', () => {
     expect(DEFAULT_SOFT_DECODE_OPTIONS.maxQueuedBytes).toBeGreaterThan(
       DEFAULT_SOFT_DECODE_OPTIONS.maxFrameBytes
     )
+  })
+})
+
+describe('codec capability', () => {
+  test('only ships an HEVC decoder', () => {
+    expect(DEFAULT_SOFT_DECODE_CODECS).toEqual(['hevc'])
+    expect(DEFAULT_SOFT_DECODE_OPTIONS.softDecodeCodecs).toEqual(['hevc'])
+  })
+
+  test('maps codec strings, mime types and tracks to a family', () => {
+    expect(codecFamilyOf('hev1.1.6.L120.90')).toBe('hevc')
+    expect(codecFamilyOf('hvc1.1.6.L93.B0')).toBe('hevc')
+    expect(codecFamilyOf('video/mp4;codecs="hev1.1.6.L120.90"')).toBe('hevc')
+    expect(codecFamilyOf('avc1.64001f')).toBe('avc')
+    expect(codecFamilyOf('video/mp4;codecs="avc1.42E01E"')).toBe('avc')
+    expect(codecFamilyOf('av01.0.05M.08')).toBe('av1')
+    expect(codecFamilyOf('vvc1.1.6.L93.B0')).toBe('vvc')
+    expect(codecFamilyOf({ codec: 'hev1.1.6.L120.90' })).toBe('hevc')
+    expect(codecFamilyOf({ codecType: 'hevc' })).toBe('hevc')
+    expect(codecFamilyOf('')).toBe('')
+    expect(codecFamilyOf(null)).toBe('')
+    expect(codecFamilyOf('mp4a.40.2')).toBe('')
+  })
+
+  test('declares HEVC decodable and everything else not', () => {
+    expect(isSoftDecodableCodec('hev1.1.6.L120.90')).toBe(true)
+    expect(isSoftDecodableCodec({ codec: 'hvc1.1.6.L93.B0' })).toBe(true)
+    // The regression this guards: `softDecode: true` on H.264 used to install a
+    // sink that can never paint, leaving audio over a black canvas.
+    expect(isSoftDecodableCodec('avc1.64001f')).toBe(false)
+    expect(isSoftDecodableCodec('av01.0.05M.08')).toBe(false)
+    expect(isSoftDecodableCodec('')).toBe(false)
+    expect(isSoftDecodableCodec(undefined)).toBe(false)
+  })
+
+  test('honours a caller supplied family list', () => {
+    expect(isSoftDecodableCodec('avc1.64001f', ['avc', 'hevc'])).toBe(true)
+    expect(isSoftDecodableCodec('hev1.1.6.L120.90', ['avc'])).toBe(false)
+    expect(isSoftDecodableCodec('hev1.1.6.L120.90', null)).toBe(true)
+  })
+
+  test('copies the codec list so a caller cannot edit the default', () => {
+    const options = getSoftDecodeOptions()
+    options.softDecodeCodecs.push('avc')
+    expect(DEFAULT_SOFT_DECODE_OPTIONS.softDecodeCodecs).toEqual(['hevc'])
+    expect(getSoftDecodeOptions({ softDecodeCodecs: ['avc'] }).softDecodeCodecs).toEqual(['avc'])
   })
 })
 

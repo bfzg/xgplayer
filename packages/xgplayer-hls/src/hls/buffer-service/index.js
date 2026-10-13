@@ -22,6 +22,26 @@ const logger = new Logger('BufferService')
 // work; the leading fragments always declare all tracks.
 const FMP4_MOOF_SCAN_LIMIT = 8
 
+/**
+ * Bind the per-player soft decode options to a sink factory without losing the
+ * factory's own capabilities.
+ *
+ * `SinkManager` asks `canDecode` *before* it retires the MSE sink, and the
+ * wrapping arrow used to drop that property, which quietly turned every codec
+ * into a supported one.
+ *
+ * @param {(context: object) => any} factory
+ * @param {object} [options] `softDecodeOptions`
+ * @returns {(context: object) => any}
+ */
+function wrapSoftSinkFactory(factory, options) {
+  const wrapper = (context) => factory({ ...context, options: options || {} })
+  if (typeof factory.canDecode === 'function') {
+    wrapper.canDecode = (info) => factory.canDecode(info)
+  }
+  return wrapper
+}
+
 export class BufferService {
   _decryptor = new Decryptor()
   /** @type {Transmuxer} */
@@ -32,6 +52,14 @@ export class BufferService {
   _sourceCreated = false
   _needInitSegment = true
   _directAppend = false
+  /**
+   * Codec the current stream carries, kept so the runtime soft-decode entry
+   * points can be answered without a track in hand.
+   * @type {{codec?: string, width?: number, height?: number}|null}
+   */
+  _softCodecHint = null
+  /** Codec a forced soft switch was already declined for, to log it once. */
+  _softDeclineCodec = ''
   /**
    * trackId to timescale, learned from the fMP4 init segment. Media fragments
    * carry no moov, so without this the base decode time cannot be turned into
@@ -53,15 +81,16 @@ export class BufferService {
       this._sinkManager = new SinkManager({
         media: hls.media,
         createMseSink: () => new MseSink(null, cfg),
-        createSoftSink: (context) =>
-          createSoftSink({ ...context, options: cfg.softDecodeOptions || {} }),
+        createSoftSink: wrapSoftSinkFactory(createSoftSink, cfg.softDecodeOptions),
         onFallback: (info) => this._onFallback(info)
       })
-      if (cfg.softDecodeMode !== true) {
-        const mse = this._sinkManager.ensureMse()
-        if (cfg.url) {
-          mse.bindMedia(hls.media).then((e) => this.hls.emit(EVENT.MEDIASOURCE_OPENED, e))
-        }
+      // Built (and attached) up front even when software decoding is forced:
+      // the switch can be declined for a codec without a software decoder, and
+      // the MSE sink has to exist and be open by the time the first segment is
+      // appended. `auto` already worked this way.
+      const mse = this._sinkManager.ensureMse()
+      if (cfg.url) {
+        mse.bindMedia(hls.media).then((e) => this.hls.emit(EVENT.MEDIASOURCE_OPENED, e))
       }
     } else {
       this._rawMse = new MSE(null, {
@@ -501,6 +530,13 @@ export class BufferService {
    * Choose the soft sink for the current chunk when software decoding is
    * either requested up-front (`softDecodeMode: true`) or required because the
    * platform cannot decode HEVC (`softDecodeMode: 'auto'`).
+   *
+   * A forced switch still has to be one the sink can honour: `switchToSoft`
+   * asks the factory what it can decode and declines (leaving the MSE sink
+   * alone) when the answer is no. That is what keeps `softDecode: true` on an
+   * H.264 stream on the platform decoder instead of an audio-only element with
+   * an unpaintable canvas.
+   *
    * @private
    * @returns {Promise<import('xgplayer-streaming-shared').MediaSink | null>}
    */
@@ -512,8 +548,15 @@ export class BufferService {
       width: videoTrack?.width,
       height: videoTrack?.height
     }
+    // Remembered so the runtime entry points (`player.forceSoftDecode()`) can be
+    // answered without a track in hand.
+    if (info.codec) this._softCodecHint = info
     if (mode === true) {
-      await this._sinkManager.switchToSoft(SinkSwitchReason.FORCED, info)
+      if (this._sinkManager.canSoftDecodeTrack(info)) {
+        await this._sinkManager.switchToSoft(SinkSwitchReason.FORCED, info)
+      } else {
+        this._warnSoftDecodeUnavailable(info)
+      }
     } else if (mode === 'auto' && !this._sinkManager.isSoft) {
       if (isHevcTrack(videoTrack) && !supportsHevcMse(videoTrack?.codec)) {
         await this._sinkManager.switchToSoft(SinkSwitchReason.UNSUPPORTED, info)
@@ -523,19 +566,64 @@ export class BufferService {
   }
 
   /**
+   * Whether the configured soft sink could decode the given codec, or the codec
+   * of the stream that is playing when nothing is passed.
+   * @param {string|{codec?: string}|null} [value]
+   * @returns {boolean}
+   */
+  canSoftDecode(value) {
+    if (!this._sinkManager) return false
+    const info =
+      typeof value === 'string' ? { codec: value } : value || this._softCodecHint
+    return this._sinkManager.canSoftDecodeTrack(info || {})
+  }
+
+  /**
+   * Say once why a requested soft switch is not happening, instead of on every
+   * appended segment.
+   * @private
+   */
+  _warnSoftDecodeUnavailable(info) {
+    const codec = info?.codec || 'unknown codec'
+    if (this._softDeclineCodec === codec) return
+    this._softDeclineCodec = codec
+    const active = this._sinkManager?.isSoft ? 'soft' : 'mse'
+    logger.warn(
+      `softDecode is forced but ${codec} has no software decoder, ` +
+        (active === 'soft'
+          ? 'the soft sink cannot be undone without a reload'
+          : 'keeping native decode')
+    )
+    if (typeof this.hls?.emit === 'function') {
+      this.hls.emit(EVENT.SOFT_DECODE_FALLBACK, {
+        reason: SinkSwitchReason.FORCED,
+        from: active,
+        to: active,
+        declined: true,
+        codec: info?.codec,
+        message: `${codec} has no software decoder`
+      })
+    }
+  }
+
+  /**
    * Switch to software decoding after a runtime decode/append failure.
    * @private
    */
   async _fallbackFromError(error, videoChunk) {
     if (!this._sinkManager || this._sinkManager.isSoft) return null
     return this._sinkManager.handleError(error, {
-      codec: videoChunk?.codec,
+      codec: videoChunk?.codec || this._softCodecHint?.codec,
       message: error?.message || error?.name || String(error || '')
     })
   }
 
   /**
    * Force software decoding from an external signal (`lowdecode` etc).
+   *
+   * Resolves to `null` when the sink has no decoder for the stream that is
+   * playing, so a caller can tell a decline from a switch.
+   *
    * @param {string} [reason]
    * @param {object} [info]
    * @returns {Promise<import('xgplayer-streaming-shared').MediaSink | null>}
@@ -544,7 +632,12 @@ export class BufferService {
     if (!this._sinkManager || this._sinkManager.isSoft) {
       return Promise.resolve(null)
     }
-    return this._sinkManager.switchToSoft(reason, info)
+    const withCodec = { ...(this._softCodecHint || {}), ...info }
+    if (!this._sinkManager.canSoftDecodeTrack(withCodec)) {
+      this._warnSoftDecodeUnavailable(withCodec)
+      return Promise.resolve(null)
+    }
+    return this._sinkManager.switchToSoft(reason, withCodec)
   }
 
   _onFallback(info) {
@@ -553,19 +646,42 @@ export class BufferService {
     }
   }
 
+  /**
+   * Whatever currently owns the buffered media: the installed sink, or the raw
+   * MSE when no sink was injected. Eviction has to go through it, because a
+   * soft sink's only MediaSource is the audio-only one it owns and
+   * `_mse` is deliberately null there. Reading `_mse` directly made every
+   * eviction a silent no-op while software decoding, so the audio buffer grew
+   * without bound and the playlist, which reads `media.buffered` to decide
+   * whether a seek target is already available, believed the whole programme
+   * was buffered and skipped loading the segment being seeked to.
+   */
+  get _bufferOwner() {
+    return this._sinkManager ? this._sinkManager.sink : this._rawMse
+  }
+
   async removeBuffer(start = 0, end = Infinity) {
     const media = this.hls.media
-    if (!this._mse || !media || start < 0 || end < start || start >= this._mse.duration)
-      return
+    const owner = this._bufferOwner
+    // `owner.duration` is `-1` while a sink has not been told the duration yet,
+    // which keeps this a no-op exactly as it was before.
+    if (!owner || !media || start < 0 || end < start || start >= owner.duration) return
 
-    return this._mse
-      .clearBuffer(start, end)
-      .then(() => this.hls.emit(EVENT.REMOVE_BUFFER, { start, end, removeEnd: end }))
+    return this._evict(owner, start, end).then(() =>
+      this.hls.emit(EVENT.REMOVE_BUFFER, { start, end, removeEnd: end })
+    )
+  }
+
+  /** `MediaSink` exposes `evict`, a bare `MSE` only `clearBuffer`. */
+  _evict(owner, start, end) {
+    return typeof owner.evict === 'function'
+      ? owner.evict(start, end)
+      : owner.clearBuffer(start, end)
   }
 
   async evictBuffer(bufferBehind) {
     const media = this.hls.media
-    if (!this._mse || !media || !bufferBehind || bufferBehind < 0) return
+    if (!this._bufferOwner || !media || !bufferBehind || bufferBehind < 0) return
     const currentTime = media.currentTime
     const removeEnd = currentTime - bufferBehind
     if (removeEnd <= 0) return
@@ -596,6 +712,8 @@ export class BufferService {
     this._needInitSegment = true
     this._directAppend = false
     this._fmp4TrackTimescale = {}
+    this._softCodecHint = null
+    this._softDeclineCodec = ''
   }
 
   async endOfStream() {

@@ -65,6 +65,30 @@ export class SinkManager {
     return typeof this._createSoftSink === 'function'
   }
 
+  /**
+   * Whether the configured soft sink could decode `info.codec`.
+   *
+   * The factory answers for itself (`factory.canDecode`), which is how the wasm
+   * package advertises that it only ships an HEVC decoder. Without the check a
+   * forced switch on an H.264 stream retires the MSE sink, leaves the element
+   * on an audio-only MediaSource and paints nothing, with no way back.
+   *
+   * @param {object} [info] `{codec, width, height}`
+   * @returns {boolean}
+   */
+  canSoftDecodeTrack(info = {}) {
+    const factory = this._createSoftSink
+    if (typeof factory !== 'function') return false
+    if (typeof factory.canDecode !== 'function') return true
+    try {
+      return !!factory.canDecode(info)
+    } catch (_error) {
+      // A capability probe must never stop playback; fall back to the old
+      // behaviour of letting the sink decide.
+      return true
+    }
+  }
+
   /** Last fallback descriptor, useful for stats/telemetry. */
   get fallbackInfo() {
     return this._fallbackInfo
@@ -136,13 +160,20 @@ export class SinkManager {
 
   /**
    * Install the soft sink and retire the previous one.
+   *
+   * Resolves to `null` without touching the active sink when no factory is
+   * configured or when the factory cannot decode `info.codec`.
+   *
    * @param {SinkSwitchReason|string} [reason]
-   * @param {object} [info]
+   * @param {object} [info] `{codec, width, height}`
    * @returns {Promise<import('./media-sink').MediaSink | null>}
    */
   async switchToSoft(reason = SinkSwitchReason.FORCED, info = {}) {
     if (this.isSoft) return this._sink
     if (!this.canSoftDecode) return null
+    // Declining leaves the current sink in place, which is the whole point:
+    // `previous.destroy()` below cannot be undone.
+    if (!this.canSoftDecodeTrack(info)) return null
 
     const previous = this._sink
     // The factory is allowed to be async (e.g. lazily importing the wasm

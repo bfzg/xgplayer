@@ -191,13 +191,25 @@ export class Flv extends EventEmitter {
 
   /**
    * Switch to software decoding at runtime (`lowdecode`, manual degradation).
-   * No-op when no soft sink factory was configured.
+   * No-op when no soft sink factory was configured, and it declines (resolving
+   * to `null`) when the soft sink cannot decode the codec being played.
    * @param {string} [reason]
    * @param {object} [info]
    * @returns {Promise<any>}
    */
   fallbackToSoft(reason, info) {
     return this._bufferService?.fallbackToSoft(reason, info)
+  }
+
+  /**
+   * Whether the soft sink could decode `codec`, or the codec of the stream being
+   * played when nothing is passed. `false` means there is no software decoder
+   * for it, so `fallbackToSoft()` would decline.
+   * @param {string} [codec]
+   * @returns {boolean}
+   */
+  canSoftDecode(codec) {
+    return !!this._bufferService?.canSoftDecode(codec)
   }
 
   speedInfo() {

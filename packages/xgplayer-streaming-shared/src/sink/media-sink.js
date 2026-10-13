@@ -80,6 +80,23 @@ export class MediaSink {
     return null
   }
 
+  /**
+   * Whether this sink can decode the given codec.
+   *
+   * Asked before a switch retires the sink that is currently playing, because
+   * there is no way back to it: a sink that cannot decode the stream has to be
+   * declined rather than installed. The default is `true`, so sinks (or
+   * injected factories) that never implement the check keep the behaviour they
+   * had.
+   *
+   * @param {string|{codec?: string, codecType?: string}|null} [codec]
+   * @returns {boolean}
+   */
+  canDecode(codec) {
+    // eslint-disable-line no-unused-vars
+    return true
+  }
+
   /** True once the sink has produced something playable. */
   get isOpened() {
     return false

@@ -1,6 +1,11 @@
 import { MediaSink, SinkKind } from 'xgplayer-streaming-shared'
 import { AudioOutput } from './audio/audio-output'
-import { getSoftDecodeOptions } from './config'
+import {
+  DEFAULT_SOFT_DECODE_CODECS,
+  DEFAULT_TIMELINE_JUMP_THRESHOLD,
+  getSoftDecodeOptions,
+  isSoftDecodableCodec
+} from './config'
 import { createFramePacer } from './decoder/av-sync'
 import { buildHevcPackets } from './decoder/nalu'
 import { createDecoder } from './decoder/session'
@@ -9,6 +14,14 @@ import { detachOverlayCanvas, ensureOverlayCanvas, syncMediaSize } from './rende
 
 /** Frames thrown away by one resync before the gate gives up and paints. */
 const MAX_RESYNC_FRAMES = 120
+
+/**
+ * Seconds the media clock may move backwards before it counts as a seek.
+ *
+ * `currentTime` never decreases during playback, so anything past the jitter of
+ * a single element update is the user (or the app) jumping back.
+ */
+const CLOCK_REWIND_THRESHOLD = 0.5
 
 /**
  * Snapshot the demuxed video track into plain data before any async work.
@@ -207,10 +220,13 @@ export class SoftSink extends MediaSink {
       maxQueuedBytes: this._options.maxQueuedBytes
     })
     this._audio = new AudioOutput(this._media, this._options, deps)
-    /** Container time, in seconds, that the media timeline starts at; `null` until locked. */
-    this._origin = null
-    /** `currentTime` the first appended batch is meant to play at. */
-    this._start = 0
+    /**
+     * Media seconds minus container seconds for the batches in flight; `null`
+     * until the first batch names its position on the media timeline.
+     */
+    this._offset = null
+    /** Previous reading of the media clock, used to notice a backward seek. */
+    this._lastClock = null
     this._canvas = null
     this._renderer = null
     this._decoder = null
@@ -261,6 +277,8 @@ export class SoftSink extends MediaSink {
       suppressed: 0,
       /** Resyncs that ran out of patience and painted without a keyframe. */
       resyncAbandoned: 0,
+      /** Times the source restarted its clock and the mapping was rebuilt. */
+      timelineJumps: 0,
       queue: 0,
       decoder: null,
       variant: null
@@ -293,6 +311,22 @@ export class SoftSink extends MediaSink {
 
   get isOpened() {
     return !!this._media
+  }
+
+  /**
+   * Whether this sink can decode the given codec.
+   *
+   * The answer is the contract the streaming layer asks before it retires the
+   * MSE sink: this package ships an HEVC decoder only, so a forced switch on an
+   * H.264 stream would leave the element on an audio-only MediaSource with a
+   * canvas that can never be painted.
+   *
+   * @param {string|{codec?: string, codecType?: string}|null} [value] codec
+   *   string, mime type or demuxer track
+   * @returns {boolean}
+   */
+  canDecode(value) {
+    return isSoftDecodableCodec(value, this._options.softDecodeCodecs)
   }
 
   get videoWidth() {
@@ -355,9 +389,14 @@ export class SoftSink extends MediaSink {
 
   async _append(video, audioTrack, anchor, start, generation) {
     if (this._stale(generation)) return
-    this._establishTimeline(video, anchor, start)
+    // A backward seek moves the element's clock behind work already queued for
+    // the position being left, so that work belongs to a place playback will
+    // never reach from here.
+    this._watchRewind()
+    const offset = this._alignTimeline(video, anchor, start)
     // First the clock, then the pictures. Everything after this point may take
     // as long as it likes without putting the element out of data.
+    this._audio.setTimeline(offset)
     await this._audio.append(audioTrack, video?.span)
     if (this._stale(generation) || !video) return
     await this._ensureRenderer()
@@ -368,7 +407,9 @@ export class SoftSink extends MediaSink {
     // and building a replacement is what clears the "first keyframe seen" state.
     await this._ensureDecoder(video)
     if (this._stale(generation)) return
-    const packets = this._filterStart(video.packets)
+    const packets = this._filterStart(
+      this._rebasePackets(video.packets, offset, video.timescale)
+    )
     if (packets.length) this._pending.push(...packets)
     this._trimPending()
     // Deliberately not awaited: the pump is paced by `_tick`, so the caller can
@@ -377,14 +418,27 @@ export class SoftSink extends MediaSink {
   }
 
   /**
-   * Lock the demuxer timeline to the media timeline, once.
+   * Resolve the offset that puts this batch on the element's timeline, and
+   * rebuild it when the source has restarted its own clock.
    *
-   * HLS fragments carry the absolute `tfdt` of the source mp4 (hours into a
-   * recording), while the element plays from `segment.start`. The hardware path
-   * shifts both SourceBuffers with `setTimeoffset()`; here the video half is
-   * decoded in the demuxer timeline, so one number does the same job: `_origin`
-   * is added to `currentTime` by `_clock()`, and its negative is handed to the
-   * audio MSE as a `timestampOffset`.
+   * HLS fragments carry the `tfdt` of the source mp4, while the element plays
+   * from the playlist position. The hardware path handles that per append with
+   * `SourceBuffer.timestampOffset`, and the same shape works here: one number
+   * per batch, `offset = media position - container position`, added to the
+   * compressed packets and handed to the audio-only MSE. Because the offset is
+   * applied to the batch rather than parked on the sink, a batch that was read
+   * ahead — the preloader crossing into the next file long before playback
+   * reaches it — cannot move the pictures already queued for the current one.
+   *
+   * The offset only holds while the source keeps counting from the same place.
+   * Recording back-ends that stamp every fragment file from zero restart the
+   * clock mid-programme (published as an HLS discontinuity), and a seek into
+   * such a file arrives with stamps that belong to a different offset. Keeping
+   * the old one appends the audio at a negative time, so the buffered range
+   * never reaches the seek target, the seek is undone back onto the old
+   * buffered end, and the loader then walks forward one segment at a time. A
+   * batch whose own stamps disagree with the offset in force therefore rebuilds
+   * it.
    *
    * The audio track is the anchor rather than `min(video, audio)`, because the
    * MSE the element reads is audio-only. A hole at the head of that MSE stalls
@@ -395,23 +449,113 @@ export class SoftSink extends MediaSink {
    * @param {{span: {from: number, to: number}}|null} video
    * @param {{from: number}|null} anchor audio start of this batch, in container
    *   seconds, read before the demuxer could move it
-   * @param {number} [start]
+   * @param {number} [start] media position this batch belongs at
+   * @returns {number} media seconds minus container seconds
    */
-  _establishTimeline(video, anchor, start) {
-    if (this._origin !== null) return
-    let origin = null
+  _alignTimeline(video, anchor, start) {
+    let from = null
     if (anchor && Number.isFinite(anchor.from)) {
-      origin = anchor.from
-    }
-    if (origin === null) {
+      from = anchor.from
+    } else if (video?.span && Number.isFinite(video.span.from)) {
       // Video only: the silent track is synthesised across the video span, so
       // the span start is the same number.
-      if (!video?.span || !Number.isFinite(video.span.from)) return
-      origin = video.span.from
+      from = video.span.from
     }
-    this._start = Number.isFinite(start) ? start : 0
-    this._origin = origin
-    this._audio.setTimeline(this._start - this._origin)
+    if (from === null) return this._offset || 0
+
+    const startTime = Number.isFinite(start) ? start : null
+    if (this._offset === null) {
+      // A caller that does not name a media position (a live FLV reader) starts
+      // the stream where playback starts.
+      this._offset = (startTime === null ? 0 : startTime) - from
+      return this._offset
+    }
+    // Without a named position there is nothing to compare against, so the
+    // offset in force is carried over unchanged.
+    if (startTime === null) return this._offset
+
+    const expected = startTime - this._offset
+    const jump = Math.abs(from - expected)
+    const threshold = Number.isFinite(this._options.timelineJumpThreshold)
+      ? this._options.timelineJumpThreshold
+      : DEFAULT_TIMELINE_JUMP_THRESHOLD
+    if (jump <= threshold) return this._offset
+
+    this._offset = startTime - from
+    this._stats.timelineJumps += 1
+    // Nothing is resynced here. Re-locking the offset does not invalidate the
+    // decoder: it keeps its state across the jump exactly as it does across any
+    // other segment boundary, and each new file opens with an IRAP. Suppressing
+    // output instead would black out the pictures that are already queued and
+    // still valid, which is several seconds of frozen canvas whenever the
+    // preloader reaches the next file ahead of playback.
+    if (this._options.openLog) {
+      console.warn(
+        '[xgplayer-soft-decode] source clock jumped',
+        Math.round(jump),
+        's, offset',
+        this._offset
+      )
+    }
+    return this._offset
+  }
+
+  /**
+   * Move one batch's compressed packets from container time to media time.
+   *
+   * One integer delta for the whole batch keeps the pictures' relative timing
+   * exact, which the pacer relies on to reorder decode-order output.
+   *
+   * @param {{pts: number, dts: number}[]} packets
+   * @param {number} offset media seconds minus container seconds
+   * @param {number} timescale ticks per second of the packets
+   * @returns {{pts: number, dts: number}[]}
+   */
+  _rebasePackets(packets, offset, timescale) {
+    if (!packets?.length || !offset) return packets
+    const delta = Math.round(offset * (timescale > 0 ? timescale : 1))
+    if (!delta) return packets
+    for (const packet of packets) {
+      packet.pts += delta
+      packet.dts += delta
+    }
+    return packets
+  }
+
+  /**
+   * Notice a backward move of the media clock and drop what is queued ahead of
+   * it.
+   *
+   * Seeking backwards leaves the packet backlog and the decoded frames of the
+   * position being left in the future. Nothing would shed them: the catch-up
+   * rule only cuts packets the clock has passed, and the decode budget stops
+   * decoding while the newest queued picture sits ahead of the clock, so the
+   * canvas would hold its last picture for the whole distance back.
+   *
+   * @returns {boolean} whether the queue was dropped
+   */
+  _watchRewind() {
+    const now = this._clock()
+    const previous = this._lastClock
+    this._lastClock = now
+    if (previous === null || !(now < previous - CLOCK_REWIND_THRESHOLD)) return false
+    this._dropQueue()
+    if (this._options.openLog) {
+      console.warn(
+        '[xgplayer-soft-decode] clock moved back',
+        (previous - now).toFixed(1),
+        's, dropped queued pictures'
+      )
+    }
+    return true
+  }
+
+  /** Forget everything queued for the position playback is leaving. */
+  _dropQueue() {
+    this._pending = []
+    this._pacer.clear()
+    this._pacer.consumeDropped()
+    this._stats.queue = 0
   }
 
   /**
@@ -697,10 +841,17 @@ export class SoftSink extends MediaSink {
     }
   }
 
+  /**
+   * The element's own clock, in seconds.
+   *
+   * Packets and decoded pictures are rebased onto this timeline by
+   * {@link SoftSink#_alignTimeline}, so no offset is applied here: the pacer,
+   * the catch-up rule and the decode budget all compare like with like.
+   * @returns {number}
+   */
   _clock() {
     const value = this._clockFn()
-    if (!Number.isFinite(value)) return 0
-    return this._origin === null ? value : value + (this._origin - this._start)
+    return Number.isFinite(value) ? value : 0
   }
 
   _startTicking() {
@@ -741,6 +892,10 @@ export class SoftSink extends MediaSink {
       this._ticking = false
       return
     }
+    // Driven from here as well as from `_append`: a seek is a move of the
+    // element's clock, and the frames left over from the old position block the
+    // decoder until they are gone.
+    this._watchRewind()
     const result = this._pacer.take(this._clock())
     if (result.frame && this._renderer) {
       if (this._renderer.render(result.frame)) this._stats.rendered += 1
@@ -861,9 +1016,9 @@ export class SoftSink extends MediaSink {
     this._eos = false
     this._flushed = false
     this._finalizing = false
-    // Re-locked from the next batch's `start`, which is how a seek is honoured.
-    this._origin = null
-    this._start = 0
+    // Re-derived from the next batch's `start`, which is how a seek is honoured.
+    this._offset = null
+    this._lastClock = null
     await this._teardownDecoder()
     await this._audio.reset(reuse)
   }
@@ -908,15 +1063,25 @@ export class SoftSink extends MediaSink {
 
 /**
  * Build a `SinkManager.createSoftSink` compatible factory.
+ *
+ * The factory carries a `canDecode` capability, which is how `SinkManager`
+ * decides whether a switch is even possible *before* it retires the MSE sink:
+ * creating the sink first and finding out afterwards would already have thrown
+ * the platform decoder away, and there is no way back to it.
+ *
  * @param {object} [baseOptions]
- * @returns {(context: object) => SoftSink}
+ * @returns {((context: object) => SoftSink) & {canDecode: (info?: object) => boolean}}
  */
 export function createSoftSinkFactory(baseOptions = {}) {
-  return (context = {}) => {
+  const codecs = getSoftDecodeOptions(baseOptions).softDecodeCodecs
+  const factory = (context = {}) => {
     const { media, info = {}, options } = context
     const merged = { ...baseOptions, ...(options || {}) }
     const sink = new SoftSink(media, merged, merged.deps || {})
     if (info.codec) sink.codec = info.codec
     return sink
   }
+  factory.canDecode = (info = {}) =>
+    isSoftDecodableCodec(info?.codec || info, codecs || DEFAULT_SOFT_DECODE_CODECS)
+  return factory
 }

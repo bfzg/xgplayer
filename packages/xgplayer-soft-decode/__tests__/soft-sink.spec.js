@@ -204,6 +204,38 @@ describe('createSoftSinkFactory', () => {
     expect(sink.codec).toBe('hev1.1.6.L120.90')
     expect(sink.isOpened).toBe(false)
   })
+
+  test('answers what it can decode without building a sink', () => {
+    const factory = createSoftSinkFactory()
+    expect(typeof factory.canDecode).toBe('function')
+    expect(factory.canDecode({ codec: 'hev1.1.6.L120.90' })).toBe(true)
+    expect(factory.canDecode({ codec: 'avc1.64001f' })).toBe(false)
+    expect(factory.canDecode('hvc1.1.6.L93.B0')).toBe(true)
+    expect(factory.canDecode(null)).toBe(false)
+  })
+
+  test('honours softDecodeCodecs from the base options', () => {
+    const factory = createSoftSinkFactory({ softDecodeCodecs: ['avc'] })
+    expect(factory.canDecode({ codec: 'avc1.64001f' })).toBe(true)
+    expect(factory.canDecode({ codec: 'hev1.1.6.L120.90' })).toBe(false)
+  })
+})
+
+describe('SoftSink capabilities', () => {
+  test('canDecode accepts a codec string, a mime type or a track', () => {
+    const harness = makeHarness()
+    expect(harness.sink.canDecode('hev1.1.6.L120.90')).toBe(true)
+    expect(harness.sink.canDecode({ codec: 'hvc1.1.6.L93.B0' })).toBe(true)
+    expect(harness.sink.canDecode('avc1.64001f')).toBe(false)
+    expect(harness.sink.canDecode('video/mp4;codecs="avc1.42E01E"')).toBe(false)
+    expect(harness.sink.canDecode(null)).toBe(false)
+  })
+
+  test('follows the softDecodeCodecs option', () => {
+    const harness = makeHarness({ options: { softDecodeCodecs: ['avc'] } })
+    expect(harness.sink.canDecode('avc1.64001f')).toBe(true)
+    expect(harness.sink.canDecode('hev1.1.6.L120.90')).toBe(false)
+  })
 })
 
 describe('SoftSink', () => {
@@ -453,7 +485,7 @@ describe('SoftSink', () => {
   })
 })
 
-describe('SoftSink timeline anchor', () => {
+describe('SoftSink timeline offset', () => {
   /**
    * FLV and TS stamp baseMediaDecodeTime as "pts(ms) * timescale / 1000" while
    * samples[].pts stays in milliseconds, so the two cannot be compared: taking
@@ -470,28 +502,106 @@ describe('SoftSink timeline anchor', () => {
     return track
   }
 
-  test('locks the origin to the audio base in container seconds', async () => {
-    const harness = makeHarness()
+  test('locks the offset to the audio base in container seconds', async () => {
+    const harness = makeHarness({ options: { maxDecodeBatch: 0 } })
     const video = withSamples(makeVideoTrack(), [2700000, 2703000])
 
     await harness.sink.append(video, makeStreamAudio())
 
-    // 30s of container time, both as the decode origin and as the offset the
-    // audio MSE is asked to shift its own clock by.
-    expect(harness.sink._origin).toBe(30)
-    expect(harness.sink._start).toBe(0)
+    // 30s of container time, so the batch starts 30s before the media timeline
+    // the audio MSE is asked to shift its own clock by.
+    expect(harness.sink._offset).toBe(-30)
     const offsets = harness.mseInstances[0].timeoffsets
     expect(offsets).toHaveLength(1)
     expect(offsets[0].value).toBe(-30)
+    // The pictures are moved onto that timeline as well: 30s of 90kHz ticks.
+    expect(harness.sink._pending.map((packet) => packet.pts)).toEqual([0, 3000])
   })
 
   test('falls back to the video span when the stream has no audio', async () => {
-    const harness = makeHarness()
+    const harness = makeHarness({ options: { maxDecodeBatch: 0 } })
     const video = withSamples(makeVideoTrack(), [2700000, 2703000])
 
     await harness.sink.append(video, null)
 
-    expect(harness.sink._origin).toBe(30)
+    expect(harness.sink._offset).toBe(-30)
     expect(harness.mseInstances[0].timeoffsets[0].value).toBe(-30)
+    expect(harness.sink._pending.map((packet) => packet.pts)).toEqual([0, 3000])
+  })
+
+  test('keeps the offset while the source keeps counting', async () => {
+    const harness = makeHarness({ options: { maxDecodeBatch: 0 } })
+    await harness.sink.append(withSamples(makeVideoTrack(), [2700000]), null, { start: 0 })
+    expect(harness.sink._offset).toBe(-30)
+
+    // The next segment continues the fragment file: 30s + 4s of container time
+    // belongs at 4s of media time.
+    await harness.sink.append(withSamples(makeVideoTrack(), [3060000]), null, {
+      start: 4
+    })
+
+    expect(harness.sink._offset).toBe(-30)
+    expect(harness.sink.stats.timelineJumps).toBe(0)
+  })
+
+  test('re-anchors when the source restarts its clock', async () => {
+    const harness = makeHarness({ options: { maxDecodeBatch: 0 } })
+    await harness.sink.append(withSamples(makeVideoTrack(), [2700000]), null, { start: 0 })
+
+    // A recording backend that stamps every fragment file from zero: 1s into the
+    // new file, while the playlist says 100s.
+    const next = withSamples(makeVideoTrack(), [90000])
+    await harness.sink.append(next, null, { start: 100 })
+
+    expect(harness.sink._offset).toBe(99)
+    expect(harness.sink.stats.timelineJumps).toBe(1)
+    expect(harness.mseInstances[0].timeoffsets.map((o) => o.value)).toEqual([-30, 99])
+    // The pictures of the new file land where the playlist says they play.
+    expect(harness.sink._pending.map((packet) => packet.pts)).toEqual([0, 9000000])
+  })
+
+  test('keeps what is queued for the current file when a later one is read ahead', async () => {
+    const harness = makeHarness({ options: { maxDecodeBatch: 0 } })
+    await harness.sink.append(withSamples(makeVideoTrack(), [2700000]), null, { start: 0 })
+    await harness.sink.append(withSamples(makeVideoTrack(), [2700000 + 90000]), null, {
+      start: 1
+    })
+    const queued = harness.sink._pending.length
+
+    // The preloader reaches the next file long before playback gets there.
+    await harness.sink.append(withSamples(makeVideoTrack(), [0]), null, { start: 205 })
+
+    expect(harness.sink.stats.timelineJumps).toBe(1)
+    // Nothing is thrown away: the pictures already decoded and queued for the
+    // current file are still ahead of the playhead and still needed.
+    expect(harness.sink._pending.length).toBe(queued + 1)
+    expect(harness.sink._pending[0].pts).toBe(0)
+    expect(harness.sink._pending[queued].pts).toBe(205 * 90000)
+  })
+
+  test('drops the queue when the clock moves backwards', async () => {
+    const harness = makeHarness({ options: { maxDecodeBatch: 0 } })
+    await harness.sink.append(withSamples(makeVideoTrack(), [0, 3000]), null, { start: 0 })
+    expect(harness.sink._pending.length).toBe(2)
+
+    harness.media.currentTime = 60
+    harness.sink._tick()
+    harness.media.currentTime = 12
+    harness.sink._tick()
+
+    expect(harness.sink._pending).toEqual([])
+    expect(harness.sink.stats.queue).toBe(0)
+  })
+
+  test('keeps the queue when the clock only advances', async () => {
+    const harness = makeHarness({ options: { maxDecodeBatch: 0 } })
+    await harness.sink.append(withSamples(makeVideoTrack(), [0, 3000]), null, { start: 0 })
+
+    harness.media.currentTime = 1
+    harness.sink._tick()
+    harness.media.currentTime = 1.2
+    harness.sink._tick()
+
+    expect(harness.sink._pending.length).toBe(2)
   })
 })

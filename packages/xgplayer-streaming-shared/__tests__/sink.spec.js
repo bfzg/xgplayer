@@ -123,6 +123,50 @@ describe('SinkManager', () => {
     await expect(manager.switchToSoft()).resolves.toBe(null)
   })
 
+  test('declines a codec the factory cannot decode, keeping the live sink', async () => {
+    const mseDestroy = jest.fn(async () => {})
+    const createSoftSink = jest.fn(() => ({ kind: SinkKind.SOFT, destroy: jest.fn() }))
+    createSoftSink.canDecode = (info) => /^hev1|^hvc1/.test(info?.codec || '')
+    const manager = new SinkManager({
+      createMseSink: () => ({ kind: SinkKind.MSE, mse: { name: 'mse' }, destroy: mseDestroy }),
+      createSoftSink
+    })
+    manager.ensureMse()
+
+    expect(manager.canSoftDecodeTrack({ codec: 'avc1.64001f' })).toBe(false)
+    await expect(
+      manager.switchToSoft(SinkSwitchReason.FORCED, { codec: 'avc1.64001f' })
+    ).resolves.toBe(null)
+
+    // The MSE sink is still the one playing: a switch cannot be undone.
+    expect(createSoftSink).not.toHaveBeenCalled()
+    expect(mseDestroy).not.toHaveBeenCalled()
+    expect(manager.isSoft).toBe(false)
+    expect(manager.mse).toEqual({ name: 'mse' })
+
+    expect(manager.canSoftDecodeTrack({ codec: 'hev1.1.6.L120.90' })).toBe(true)
+    await expect(
+      manager.switchToSoft(SinkSwitchReason.FORCED, { codec: 'hev1.1.6.L120.90' })
+    ).resolves.toBeTruthy()
+    expect(manager.isSoft).toBe(true)
+  })
+
+  test('assumes a factory without canDecode can decode anything', async () => {
+    const createSoftSink = jest.fn(() => ({ kind: SinkKind.SOFT, destroy: jest.fn() }))
+    const manager = new SinkManager({ createMseSink, createSoftSink })
+    expect(manager.canSoftDecodeTrack({ codec: 'avc1.64001f' })).toBe(true)
+    await expect(manager.switchToSoft()).resolves.toBeTruthy()
+  })
+
+  test('a throwing capability probe does not block the switch', async () => {
+    const createSoftSink = jest.fn(() => ({ kind: SinkKind.SOFT, destroy: jest.fn() }))
+    createSoftSink.canDecode = () => {
+      throw new Error('probe failed')
+    }
+    const manager = new SinkManager({ createMseSink, createSoftSink })
+    expect(manager.canSoftDecodeTrack({ codec: 'avc1.64001f' })).toBe(true)
+  })
+
   test('handleError maps the error to a switch reason', async () => {
     const softSink = { kind: SinkKind.SOFT, destroy: jest.fn() }
     const manager = new SinkManager({

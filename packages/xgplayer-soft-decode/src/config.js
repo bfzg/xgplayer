@@ -27,6 +27,13 @@
  *   clock; beyond it the late part of the backlog is cut back to a keyframe.
  *   Packets ahead of the clock, the prebuffer, are never shed. `0` disables it
  * @property {number} [maxFrameBytes] largest single packed frame accepted
+ * @property {number} [timelineJumpThreshold] seconds the source's own stamps
+ *   may disagree with the locked container/media mapping before the mapping is
+ *   re-anchored. Recording back-ends that restart every fragment file at zero
+ *   (HLS discontinuities) need this to keep seeking and playing across files
+ * @property {string[]} [softDecodeCodecs] codec families this build has a
+ *   software decoder for. Only what is listed here may be force-switched away
+ *   from the platform decoder; anything else stays on MSE
  * @property {'mse-native'} [audioThrough] how audio is decoded
  * @property {number} [audioSampleRate] sample rate of the synthesised silent
  *   track that clocks the element when the stream carries no audio
@@ -72,6 +79,86 @@ const DEFAULT_MAX_DECODE_SLICE_MS = 12
 /** Half a frame at 20 fps, plus slack for the append granularity. */
 const DEFAULT_SILENT_FILL_AHEAD = 0.2
 
+/**
+ * How far the source's own stamps may sit from the mapping the sink locked in
+ * before that mapping is rebuilt.
+ *
+ * A second is far beyond the inter-segment jitter of a normal stream, and far
+ * below the jump of a source that restarted its clock.
+ */
+export const DEFAULT_TIMELINE_JUMP_THRESHOLD = 1
+
+/**
+ * Codec families this build can actually decode.
+ *
+ * The wasm ladder in `decoder/libmedia.js` only fetches `hevc*.wasm`, and the
+ * session only knows `AV_CODEC_ID_HEVC`, so this is the list the HLS/FLV layer
+ * consults before it hands a stream over. `softDecode: true` therefore means
+ * "force software decoding where a software decoder exists"; an H.264 stream
+ * keeps the platform decoder instead of landing on a canvas nobody can paint.
+ * Adding an AVC/AV1 wasm decoder later is a matter of appending its family here
+ * and extending the decoder table.
+ */
+export const DEFAULT_SOFT_DECODE_CODECS = ['hevc']
+
+/**
+ * Codec families understood by {@link codecFamilyOf}, in match order.
+ *
+ * The sample-entry prefixes are matched after a separator (mime type, comma or
+ * whitespace) so `video/mp4;codecs="hev1.1.6.L120.90"` resolves as well as a
+ * bare `hev1.…` string, without `mp4a` matching the AVC branch.
+ */
+const CODEC_FAMILIES = [
+  {
+    family: 'hevc',
+    test: (codec) =>
+      /(?:^|[;:="'\s])(hvc1|hev1|hvc2|hev2)\b/i.test(codec) || /hevc|h\.?265/i.test(codec)
+  },
+  {
+    family: 'avc',
+    test: (codec) =>
+      /(?:^|[;:="'\s])(avc1|avc3|avc4)\b/i.test(codec) || /h\.?264/i.test(codec)
+  },
+  { family: 'av1', test: (codec) => /(?:^|[;:="'\s])av01\b/i.test(codec) },
+  {
+    family: 'vvc',
+    test: (codec) =>
+      /(?:^|[;:="'\s])(vvc1|vvi1)\b/i.test(codec) || /h\.?266|vvc/i.test(codec)
+  }
+]
+
+/**
+ * Normalise a codec string, a full mime type, or a track to a family name.
+ *
+ * Accepts `hvc1.1.6.L93.B0`, `video/mp4;codecs="hev1.1.6.L120.90"`, or a
+ * demuxer track (`{codec, codecType}`), because the callers on the streaming
+ * side have different shapes at hand.
+ *
+ * @param {string|{codec?: string, codecType?: string}|null} [value]
+ * @returns {''|'hevc'|'avc'|'av1'|'vvc'}
+ */
+export function codecFamilyOf(value) {
+  const codec =
+    typeof value === 'string' ? value : `${value?.codec || ''} ${value?.codecType || ''}`
+  if (!codec.trim()) return ''
+  const hit = CODEC_FAMILIES.find((item) => item.test(codec))
+  return hit ? hit.family : ''
+}
+
+/**
+ * Whether this build has a software decoder for the given codec.
+ *
+ * @param {string|{codec?: string, codecType?: string}|null} [value]
+ * @param {string[]} [codecs] defaults to `softDecodeCodecs`
+ * @returns {boolean}
+ */
+export function isSoftDecodableCodec(value, codecs = DEFAULT_SOFT_DECODE_CODECS) {
+  const family = codecFamilyOf(value)
+  if (!family) return false
+  const list = Array.isArray(codecs) ? codecs : DEFAULT_SOFT_DECODE_CODECS
+  return list.includes(family)
+}
+
 export const DEFAULT_SOFT_DECODE_OPTIONS = {
   enabled: true,
   worker: 'auto',
@@ -86,6 +173,8 @@ export const DEFAULT_SOFT_DECODE_OPTIONS = {
   maxDecodeSliceMs: DEFAULT_MAX_DECODE_SLICE_MS,
   maxPendingPackets: DEFAULT_MAX_PENDING_PACKETS,
   maxFrameBytes: DEFAULT_MAX_FRAME_BYTES,
+  timelineJumpThreshold: DEFAULT_TIMELINE_JUMP_THRESHOLD,
+  softDecodeCodecs: DEFAULT_SOFT_DECODE_CODECS,
   audioThrough: 'mse-native',
   audioSampleRate: 48000,
   audioChannelCount: 2,
@@ -106,13 +195,20 @@ export const DEFAULT_SOFT_DECODE_OPTIONS = {
 }
 
 /**
- * Merge caller options over the defaults. A shallow spread is enough because no
- * default value is a mutable object that a caller is expected to extend.
+ * Merge caller options over the defaults.
+ *
+ * The shallow spread is enough for the scalars; `softDecodeCodecs` is the one
+ * array default, and it is copied so a caller that appends a family to its own
+ * options cannot edit the shared default.
  * @param {Partial<SoftDecodeOption>} [options]
  * @returns {SoftDecodeOption}
  */
 export function getSoftDecodeOptions(options) {
-  return { ...DEFAULT_SOFT_DECODE_OPTIONS, ...(options || {}) }
+  const merged = { ...DEFAULT_SOFT_DECODE_OPTIONS, ...(options || {}) }
+  if (Array.isArray(merged.softDecodeCodecs)) {
+    merged.softDecodeCodecs = merged.softDecodeCodecs.slice()
+  }
+  return merged
 }
 
 /**

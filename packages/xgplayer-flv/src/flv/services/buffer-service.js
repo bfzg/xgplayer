@@ -18,6 +18,26 @@ import { TRANSFER_EVENT } from './transfer-cost'
 
 const logger = new Logger('BufferService')
 
+/**
+ * Bind the per-player soft decode options to a sink factory without losing the
+ * factory's own capabilities.
+ *
+ * `SinkManager` asks `canDecode` *before* it retires the MSE sink, and the
+ * wrapping arrow used to drop that property, which quietly turned every codec
+ * into a supported one.
+ *
+ * @param {(context: object) => any} factory
+ * @param {object} [options] `softDecodeOptions`
+ * @returns {(context: object) => any}
+ */
+function wrapSoftSinkFactory(factory, options) {
+  const wrapper = (context) => factory({ ...context, options: options || {} })
+  if (typeof factory.canDecode === 'function') {
+    wrapper.canDecode = (info) => factory.canDecode(info)
+  }
+  return wrapper
+}
+
 export class BufferService {
   /** @type {import('../index').Flv | null} */
   flv = null
@@ -29,6 +49,15 @@ export class BufferService {
   _softVideo = null
 
   _sourceCreated = false
+
+  /**
+   * Codec the current stream carries, kept so the runtime soft-decode entry
+   * points can be answered without a track in hand.
+   * @type {{codec?: string, width?: number, height?: number}|null}
+   */
+  _softCodecHint = null
+  /** Codec a forced soft switch was already declined for, to log it once. */
+  _softDeclineCodec = ''
 
   _needInitSegment = true
   _discontinuity = true
@@ -85,11 +114,13 @@ export class BufferService {
         this._sinkManager = new SinkManager({
           media: flv.media,
           createMseSink: () => new MseSink(flv.media, opts),
-          createSoftSink: (context) =>
-            createSoftSink({ ...context, options: opts.softDecodeOptions || {} }),
+          createSoftSink: wrapSoftSinkFactory(createSoftSink, opts.softDecodeOptions),
           onFallback: (info) => this._onFallback(info)
         })
-        if (opts.softDecode !== true) this._sinkManager.ensureMse()
+        // Built and attached up front even when software decoding is forced: the
+        // switch can be declined for a codec without a software decoder, and the
+        // MSE sink has to exist and be open by the first append.
+        this._sinkManager.ensureMse()
       } else {
         this._rawMse = new MSE(null, {
           preferMMS:
@@ -131,6 +162,8 @@ export class BufferService {
     this._contiguous = false
     this._sourceCreated = false
     this._initSegmentId = ''
+    this._softCodecHint = null
+    this._softDeclineCodec = ''
     this.resetSeamlessSwitchStats()
   }
 
@@ -410,17 +443,31 @@ export class BufferService {
    * Choose the soft sink for the current chunk when software decoding is either
    * requested up-front (`softDecode: true`) or required because the platform
    * cannot decode HEVC (`softDecode: 'auto'`).
+   *
+   * The forced branch is still subject to the sink's own capability check:
+   * `switchToSoft` declines (and keeps the MSE sink) for a codec the soft
+   * package has no decoder for, which is what keeps `softDecode: true` on an
+   * H.264 stream on the platform decoder.
+   *
    * @private
    * @returns {Promise<import('xgplayer-streaming-shared').MediaSink | null>}
    */
   async _selectSoftSink(videoTrack, videoExist) {
     if (!this._sinkManager) return null
+    const info = {
+      codec: videoTrack?.codec,
+      width: videoTrack?.width,
+      height: videoTrack?.height
+    }
+    // Remembered so the runtime entry points (`player.forceSoftDecode()`) can be
+    // answered without a track in hand.
+    if (info.codec) this._softCodecHint = info
     if (this._opts.softDecode === true) {
-      await this._sinkManager.switchToSoft(SinkSwitchReason.FORCED, {
-        codec: videoTrack?.codec,
-        width: videoTrack?.width,
-        height: videoTrack?.height
-      })
+      if (this._sinkManager.canSoftDecodeTrack(info)) {
+        await this._sinkManager.switchToSoft(SinkSwitchReason.FORCED, info)
+      } else {
+        this._warnSoftDecodeUnavailable(info)
+      }
     } else if (
       this._opts.softDecode === 'auto' &&
       videoExist &&
@@ -439,13 +486,54 @@ export class BufferService {
   }
 
   /**
+   * Whether the configured soft sink could decode the given codec, or the codec
+   * of the stream that is playing when nothing is passed.
+   * @param {string|{codec?: string}|null} [value]
+   * @returns {boolean}
+   */
+  canSoftDecode(value) {
+    if (!this._sinkManager) return false
+    const info =
+      typeof value === 'string' ? { codec: value } : value || this._softCodecHint
+    return this._sinkManager.canSoftDecodeTrack(info || {})
+  }
+
+  /**
+   * Say once why a requested soft switch is not happening, instead of on every
+   * appended chunk.
+   * @private
+   */
+  _warnSoftDecodeUnavailable(info) {
+    const codec = info?.codec || 'unknown codec'
+    if (this._softDeclineCodec === codec) return
+    this._softDeclineCodec = codec
+    const active = this._sinkManager?.isSoft ? 'soft' : 'mse'
+    logger.warn(
+      `softDecode is forced but ${codec} has no software decoder, ` +
+        (active === 'soft'
+          ? 'the soft sink cannot be undone without a reload'
+          : 'keeping native decode')
+    )
+    if (typeof this.flv?.emit === 'function') {
+      this.flv.emit(EVENT.SOFT_DECODE_FALLBACK, {
+        reason: SinkSwitchReason.FORCED,
+        from: active,
+        to: active,
+        declined: true,
+        codec: info?.codec,
+        message: `${codec} has no software decoder`
+      })
+    }
+  }
+
+  /**
    * Switch to software decoding after a runtime decode/append failure.
    * @private
    */
   async _fallbackFromError(error, videoTrack) {
     if (!this._sinkManager || this._sinkManager.isSoft) return null
     return this._sinkManager.handleError(error, {
-      codec: videoTrack?.codec,
+      codec: videoTrack?.codec || this._softCodecHint?.codec,
       width: videoTrack?.width,
       height: videoTrack?.height
     })
@@ -453,13 +541,22 @@ export class BufferService {
 
   /**
    * Force software decoding from an external signal (`lowdecode` etc).
+   *
+   * Resolves to `null` when the sink has no decoder for the stream that is
+   * playing, so a caller can tell a decline from a switch.
+   *
    * @param {string} [reason]
    * @param {object} [info]
    * @returns {Promise<import('xgplayer-streaming-shared').MediaSink | null>}
    */
   fallbackToSoft(reason = SinkSwitchReason.LOWDECODE, info = {}) {
     if (!this._sinkManager || this._sinkManager.isSoft) return Promise.resolve(null)
-    return this._sinkManager.switchToSoft(reason, info)
+    const withCodec = { ...(this._softCodecHint || {}), ...info }
+    if (!this._sinkManager.canSoftDecodeTrack(withCodec)) {
+      this._warnSoftDecodeUnavailable(withCodec)
+      return Promise.resolve(null)
+    }
+    return this._sinkManager.switchToSoft(reason, withCodec)
   }
 
   _onFallback(info) {

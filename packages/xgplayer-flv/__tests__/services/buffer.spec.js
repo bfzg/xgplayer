@@ -2,7 +2,7 @@ jest.mock('xgplayer-transmuxer')
 jest.mock('xgplayer-streaming-shared')
 
 import { FlvDemuxer, FMP4Remuxer } from 'xgplayer-transmuxer'
-import { MSE, Buffer } from 'xgplayer-streaming-shared'
+import { MSE, Buffer, SinkSwitchReason } from 'xgplayer-streaming-shared'
 import { BufferService } from '../../src/flv/services'
 
 describe('BufferService', () => {
@@ -232,6 +232,73 @@ describe('BufferService', () => {
     expect(unbindMedia).toHaveBeenCalled()
     await bs.destroy()
     expect(unbindMedia).toHaveBeenCalledTimes(1)
+  })
+
+
+  describe('soft decode selection', () => {
+    const makeService = (mode, canDecode) => {
+      const bs = new BufferService(flv, undefined, {
+        softDecode: mode,
+        softDecodeOptions: {},
+        createSoftSink: jest.fn()
+      })
+      const switchToSoft = jest.fn().mockResolvedValue(null)
+      bs._sinkManager = {
+        isSoft: false,
+        soft: null,
+        switchToSoft,
+        canSoftDecodeTrack: jest.fn().mockImplementation(canDecode),
+        handleError: jest.fn()
+      }
+      return { bs, switchToSoft }
+    }
+
+    const hevcOnly = (info) => /^(hev1|hvc1)/.test(info?.codec || '')
+
+    test('forced mode declines a codec without a software decoder', async () => {
+      const { bs, switchToSoft } = makeService(true, hevcOnly)
+
+      const sink = await bs._selectSoftSink({ codec: 'avc1.64001f', width: 1280 }, true)
+
+      expect(sink).toBe(null)
+      expect(switchToSoft).not.toHaveBeenCalled()
+      expect(bs._softCodecHint).toEqual({ codec: 'avc1.64001f', width: 1280, height: undefined })
+      await bs._selectSoftSink({ codec: 'avc1.64001f' }, true)
+      expect(flv.emit).toHaveBeenCalledTimes(1)
+      expect(flv.emit.mock.calls[0][1]).toMatchObject({
+        declined: true,
+        codec: 'avc1.64001f',
+        from: 'mse',
+        to: 'mse'
+      })
+    })
+
+    test('forced mode switches for hevc', async () => {
+      const { bs, switchToSoft } = makeService(true, hevcOnly)
+
+      await bs._selectSoftSink({ codec: 'hev1.1.6.L120.90' }, true)
+
+      expect(switchToSoft).toHaveBeenCalledWith(SinkSwitchReason.FORCED, {
+        codec: 'hev1.1.6.L120.90',
+        width: undefined,
+        height: undefined
+      })
+      expect(flv.emit).not.toHaveBeenCalled()
+    })
+
+    test('runtime force uses the remembered codec and can be declined', async () => {
+      const { bs, switchToSoft } = makeService(true, hevcOnly)
+      bs._softCodecHint = { codec: 'avc1.64001f', width: 1280 }
+
+      await expect(bs.fallbackToSoft()).resolves.toBe(null)
+      expect(switchToSoft).not.toHaveBeenCalled()
+
+      bs._softCodecHint = { codec: 'hev1.1.6.L120.90' }
+      await bs.fallbackToSoft()
+      expect(switchToSoft).toHaveBeenCalledWith(SinkSwitchReason.LOWDECODE, {
+        codec: 'hev1.1.6.L120.90'
+      })
+    })
   })
 
 })
