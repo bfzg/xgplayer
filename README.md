@@ -39,7 +39,6 @@ your-project/public/
       hevc-simd.wasm
       hevc-atomic.wasm
       hevc.wasm
-      hevc-64.wasm
 ```
 
 `es/` 和 `loader.js` 可选（见下文）。

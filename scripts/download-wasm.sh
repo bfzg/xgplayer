@@ -7,11 +7,13 @@ LIBMEDIA_VERSION="1.3.1"
 BASE_URL="https://cdn.jsdelivr.net/gh/zhaohappy/libmedia@${LIBMEDIA_VERSION}/dist/decode"
 TARGET="${1:-demo/wasm/decode}"
 
+# 能力阶梯的二进制：simd -> atomic -> baseline，取第一个能编译的。
+# hevc-64.wasm（wasm64 构建）不在阶梯里，只有显式 wasmVariant: '64' 才会用到，
+# 因此不随 demo / 发布包分发；需要时自行从同一个 CDN 目录取。
 FILES=(
   "hevc-simd.wasm"
   "hevc-atomic.wasm"
   "hevc.wasm"
-  "hevc-64.wasm"
 )
 
 mkdir -p "$TARGET"

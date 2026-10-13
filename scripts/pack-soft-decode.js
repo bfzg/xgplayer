@@ -26,8 +26,13 @@ const UMD_PACKAGES = ['xgplayer', 'xgplayer-hls', 'xgplayer-flv', 'xgplayer-soft
 /** Packages a bundler consumer needs; hls/flv inline the streaming layer. */
 const ES_PACKAGES = [...UMD_PACKAGES, 'xgplayer-transmuxer', 'xgplayer-streaming-shared']
 
-/** Capability ladder binaries, best first. Only HEVC is ever fetched. */
-const WASM_FILES = ['hevc-simd.wasm', 'hevc-atomic.wasm', 'hevc.wasm', 'hevc-64.wasm']
+/**
+ * Capability ladder binaries, best first. Only HEVC is ever fetched, and only
+ * the default ladder is shipped: `hevc-64.wasm` is an opt-in wasm64 build that
+ * `wasmVariant: '64'` would have to request, and no released browser can compile
+ * it, so it stays out of the bundle.
+ */
+const WASM_FILES = ['hevc-simd.wasm', 'hevc-atomic.wasm', 'hevc.wasm']
 
 function arg (argv, flag) {
   const i = argv.indexOf(flag)

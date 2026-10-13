@@ -112,7 +112,10 @@ wasmBytes > wasmModule > loadWasm > decoderWasmUrl > wasmBaseUrl 下的能力阶
 ```
 
 能力阶梯按 `simd -> atomic -> baseline` 逐个下载并 `WebAssembly.validate`，取第一个能编译的。
-`hevc-64.wasm` 不在默认阶梯里，只有显式 `wasmVariant: '64'` 才会先试它。默认基址：
+这三个就是需要分发的全部二进制（`scripts/download-wasm.sh` 与 `scripts/pack-soft-decode.js`
+都只取这三个）。可选变体 `wasmVariant: '64'` 会先试 `hevc-64.wasm`，但那是 wasm64 构建、
+目前没有正式浏览器能编译它，所以不随 demo / 发布包分发：真要试就自己把该文件放到
+`wasmBaseUrl` 下。默认基址：
 
 ```text
 https://cdn.jsdelivr.net/gh/zhaohappy/libmedia@1.3.1/dist
