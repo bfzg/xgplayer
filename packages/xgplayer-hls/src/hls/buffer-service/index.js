@@ -139,6 +139,27 @@ export class BufferService {
     return !!(this._softVideo || this._sinkManager)
   }
 
+  /**
+   * Whether an fMP4 source has to enter the custom demux/remux path.
+   *
+   * `auto` exists to recover HEVC on platforms without an HEVC MSE decoder.
+   * H.264 already has the official direct-append path and must stay on it;
+   * forcing every fMP4 through FMP4Demuxer/FMP4Remuxer is unnecessary and can
+   * change the packet timeline. Explicit forced software decoding still selects
+   * the custom path.
+   *
+   * @param {string} [videoCodec]
+   * @returns {boolean}
+   * @private
+   */
+  _shouldUseSoftPathForFmp4(videoCodec) {
+    if (!this._transmuxRaw) return false
+    const mode = this.hls?.config?.softDecodeMode
+    if (mode === true) return true
+    if (mode !== 'auto') return false
+    return /(^|[/;"' ])(hvc1|hev1)(\.|\b)/i.test(videoCodec || '')
+  }
+
   get nbSb() {
     if (!this._mse?._sourceBuffer) return 0
 
@@ -194,7 +215,59 @@ export class BufferService {
           this._transmuxRaw
         )
     } else if (MP4Parser.probe(chunk)) {
-      if (this._transmuxRaw) {
+      let mix = false
+      if (videoChunk && !videoCodec) {
+        MP4Parser.findBox(videoChunk, ['moov', 'trak']).forEach((t) => {
+          const box = MP4Parser.findBox(t.data, [
+            'trak',
+            'mdia',
+            'minf',
+            'stbl',
+            'stsd'
+          ])[0]
+          if (box) {
+            const e = MP4Parser.stsd(box).entries[0]
+            if (e) {
+              if (e.hvcC) {
+                videoCodec = e.hvcC.codec
+              } else if (e.avcC) {
+                videoCodec = e.avcC.codec
+              } else if (e.type === 'hvc1' || e.type === 'hev1') {
+                // HEVC sample entry without a packed hvcC, the parameter sets
+                // live in the elementary stream. Keep the container honest
+                // instead of falling through to the H.264 default below.
+                videoCodec = `${e.type}.1.6.L93.B0`
+              } else if (e.sampleRate || e.esds) {
+                audioCodec = e.esds?.codec || 'mp4a.40.2'
+                mix = true
+              }
+            }
+          }
+        })
+      }
+      if (audioChunk && !audioCodec) {
+        MP4Parser.findBox(audioChunk, [
+          'moov',
+          'trak',
+          'mdia',
+          'minf',
+          'stbl',
+          'stsd'
+        ]).forEach((stsd) => {
+          const e = MP4Parser.stsd(stsd).entries[0]
+          if (e && e.esds) audioCodec = e.esds.codec
+        })
+      }
+      if (videoChunk && !videoCodec) videoCodec = 'avc1.42e01e'
+      if (audioChunk && !audioCodec) audioCodec = 'mp4a.40.2'
+      if (mix) {
+        videoCodec += `, ${audioCodec}`
+        audioCodec = ''
+      }
+
+      if (videoCodec) this._softCodecHint = { codec: videoCodec }
+
+      if (this._shouldUseSoftPathForFmp4(videoCodec)) {
         if (!this._transmuxer)
           this._transmuxer = new Transmuxer(
             this.hls,
@@ -204,56 +277,10 @@ export class BufferService {
             true
           )
       } else {
+        // Keep already-valid H.264 fMP4 on the official direct-append path.
+        // Demuxing/remuxing it only because a soft-decoder factory exists
+        // changes the packet timeline without enabling the HEVC-only decoder.
         this._directAppend = true
-        let mix = false
-        if (videoChunk && !videoCodec) {
-          MP4Parser.findBox(videoChunk, ['moov', 'trak']).forEach((t) => {
-            const box = MP4Parser.findBox(t.data, [
-              'trak',
-              'mdia',
-              'minf',
-              'stbl',
-              'stsd'
-            ])[0]
-            if (box) {
-              const e = MP4Parser.stsd(box).entries[0]
-              if (e) {
-                if (e.hvcC) {
-                  videoCodec = e.hvcC.codec
-                } else if (e.avcC) {
-                  videoCodec = e.avcC.codec
-                } else if (e.type === 'hvc1' || e.type === 'hev1') {
-                  // HEVC sample entry without a packed hvcC, the parameter sets
-                  // live in the elementary stream. Keep the container honest
-                  // instead of falling through to the H.264 default below.
-                  videoCodec = `${e.type}.1.6.L93.B0`
-                } else if (e.sampleRate || e.esds) {
-                  audioCodec = e.esds?.codec || 'mp4a.40.2'
-                  mix = true
-                }
-              }
-            }
-          })
-        }
-        if (audioChunk && !audioCodec) {
-          MP4Parser.findBox(audioChunk, [
-            'moov',
-            'trak',
-            'mdia',
-            'minf',
-            'stbl',
-            'stsd'
-          ]).forEach((stsd) => {
-            const e = MP4Parser.stsd(stsd).entries[0]
-            if (e && e.esds) audioCodec = e.esds.codec
-          })
-        }
-        if (videoChunk && !videoCodec) videoCodec = 'avc1.42e01e'
-        if (audioChunk && !audioCodec) audioCodec = 'mp4a.40.2'
-        if (mix) {
-          videoCodec += `, ${audioCodec}`
-          audioCodec = ''
-        }
         this._createMseSource(videoCodec, audioCodec)
       }
     } else {

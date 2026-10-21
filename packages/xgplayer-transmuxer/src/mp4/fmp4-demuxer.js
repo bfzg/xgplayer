@@ -156,13 +156,16 @@ export class FMP4Demuxer {
       this.__lastRemainDataStart = dataStart
     }
 
-    // fmp4中sample.pts是通过tfdt的baseMediaDecodeTime + sample.duration计算得出的
-    // 所以此处sample的pts是多少不重要，反而需要确保demuxPart中baseMediaDecodeTime的值为起始帧的pts，才能保证remux后解析的结果与原始数据一致
+    // tfdt is a DECODE timestamp base. It must be the first sample's DTS, not
+    // PTS: with B-frames PTS can be later by the first sample's CTS, and using
+    // it shifts the remuxed segment too far forward. The HLS MSE time-offset
+    // correction then subtracts that inflated base and can push the first DTS
+    // negative, producing visible backward/forward jumps.
     if (videoTrack.samples.length) {
-      videoTrack.baseMediaDecodeTime = videoTrack.samples[0].pts
+      videoTrack.baseMediaDecodeTime = videoTrack.samples[0].dts
     }
     if (audioTrack.samples.length) {
-      audioTrack.baseMediaDecodeTime = audioTrack.samples[0].pts
+      audioTrack.baseMediaDecodeTime = audioTrack.samples[0].dts
     }
 
     return {
@@ -246,14 +249,13 @@ export class FMP4Demuxer {
       })
     }
 
-    // 与 demuxPart 同理：sample.pts 由每个 moof 的 tfdt 推出，遍历结束后
-    // baseMediaDecodeTime 停在最后一个 moof 的 tfdt 上，已经不代表本批数据的起点。
-    // 重写成首个 sample 的 pts，remux 时写入的 tfdt 才与样本真正开始的位置一致。
+    // Multiple moofs leave baseMediaDecodeTime at the last fragment's tfdt.
+    // Restore it to the first sample's DTS so remux writes the correct tfdt.
     if (videoTrack.samples.length) {
-      videoTrack.baseMediaDecodeTime = videoTrack.samples[0].pts
+      videoTrack.baseMediaDecodeTime = videoTrack.samples[0].dts
     }
     if (audioTrack.samples.length) {
-      audioTrack.baseMediaDecodeTime = audioTrack.samples[0].pts
+      audioTrack.baseMediaDecodeTime = audioTrack.samples[0].dts
     }
 
     return {

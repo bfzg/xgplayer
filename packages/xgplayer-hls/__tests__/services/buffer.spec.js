@@ -351,5 +351,23 @@ describe('BufferService', () => {
         codec: 'hev1.1.6.L120.90'
       })
     })
+
+    test('auto fMP4 keeps H.264 on the official direct path and only remuxes HEVC', () => {
+      hls.config = { softDecodeMode: 'auto' }
+      const bs = new BufferService(hls)
+      // The path predicate only needs to know that a soft-capable sink exists.
+      bs._sinkManager = {}
+
+      expect(bs._shouldUseSoftPathForFmp4('avc1.64001f')).toBe(false)
+      expect(bs._shouldUseSoftPathForFmp4('video/mp4; codecs="avc1.64001f"')).toBe(false)
+      expect(bs._shouldUseSoftPathForFmp4('hev1.1.6.L120.90')).toBe(true)
+      expect(bs._shouldUseSoftPathForFmp4('hvc1.1.6.L120.90')).toBe(true)
+
+      hls.config.softDecodeMode = false
+      expect(bs._shouldUseSoftPathForFmp4('hev1.1.6.L120.90')).toBe(false)
+
+      hls.config.softDecodeMode = true
+      expect(bs._shouldUseSoftPathForFmp4('avc1.64001f')).toBe(true)
+    })
   })
 })

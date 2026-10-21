@@ -71,10 +71,11 @@ describe('FMP4Demuxer.demux', () => {
     const samples = videoTrack.samples
 
     // Walking the moofs leaves the field at the *last* tfdt, a whole fragment
-    // past the batch. Both the soft sink's timeline lock and `MP4.traf` read it,
-    // so a stale value delays the audio and opens a hole per segment boundary.
+    // past the batch. `tfdt` is a decode-time base, so it must be restored to
+    // the first sample's DTS. Using PTS here shifts B-frame streams forward by
+    // the first sample's CTS and makes the MSE rebase go negative.
     expect(segment.secondBase).toBeGreaterThan(segment.firstBase)
-    expect(videoTrack.baseMediaDecodeTime).toBe(samples[0].pts)
-    expect(videoTrack.baseMediaDecodeTime).toBeLessThan(samples[samples.length - 1].pts)
+    expect(videoTrack.baseMediaDecodeTime).toBe(samples[0].dts)
+    expect(videoTrack.baseMediaDecodeTime).toBeLessThan(samples[samples.length - 1].dts)
   })
 })
