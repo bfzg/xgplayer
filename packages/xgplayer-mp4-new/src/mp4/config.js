@@ -1,7 +1,8 @@
-export function getConfig (cfg) {
+export function getConfig(cfg) {
   const media = cfg?.media || document.createElement('video')
   return {
     softDecode: false,
+    createSoftSink: null,
     tickInterval: 500,
     preloadTime: 10,
     bufferBehind: 10,

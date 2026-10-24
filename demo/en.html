@@ -4,11 +4,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="xgplayer H.265 software decoding demo: FLV / WS-FLV / HLS, hardware first with wasm fallback.">
+  <meta name="description" content="xgplayer H.265 software decoding demo: FLV / WS-FLV / HLS / MP4, hardware first with wasm fallback.">
   <meta name="theme-color" content="#0084d1">
   <meta property="og:title" content="xgplayer HEVC Soft Decode Demo">
-  <meta property="og:description" content="FLV / WS-FLV / HLS · Hardware first · wasm fallback">
-  <title>xgplayer HEVC Soft Decode Demo · FLV / WS-FLV / HLS</title>
+  <meta property="og:description" content="FLV / WS-FLV / HLS / MP4 · Hardware first · wasm fallback">
+  <title>xgplayer HEVC Soft Decode Demo · FLV / WS-FLV / HLS / MP4</title>
   <link rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23e6f6fc'/%3E%3Cpath d='M26 19l21 13-21 13z' fill='%230084d1'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="./umd/xgplayer.min.css">
@@ -993,7 +993,7 @@
       <div class="brand">
         <div>
           <h1>xgplayer HEVC Soft Decode Demo</h1>
-          <p>FLV / WS-FLV / HLS · Hardware first · wasm fallback</p>
+          <p>FLV / WS-FLV / HLS / MP4 · Hardware first · wasm fallback</p>
         </div>
       </div>
       <div class="env">
@@ -1023,7 +1023,7 @@
             <label class="url-field" for="url">
               <span>Stream URL</span>
               <input id="url" name="url" type="text" inputmode="url" spellcheck="false"
-                placeholder="https://…/live.flv · ws://…/live.flv · https://…/index.m3u8">
+                placeholder="https://…/live.flv · ws://…/live.flv · https://…/index.m3u8 · https://…/video.mp4">
             </label>
             <button class="btn btn-primary" id="playBtn" type="submit">
               <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1062,6 +1062,7 @@
                 <label><input type="radio" name="fmt" value="flv"> <span><b>FLV / WS</b><small>ws-flv, http-flv</small></span>
                 </label>
                 <label><input type="radio" name="fmt" value="hls"><span><b>HLS</b><small>ts, mp4</small></span></label>
+                <label><input type="radio" name="fmt" value="mp4"><span><b>MP4</b><small>H.265 software</small></span></label>
               </div>
             </fieldset>
             <div style="height: 14px;"></div>
@@ -1153,6 +1154,7 @@
   <script src="./umd/xgplayer-soft-decode.min.js"></script>
   <script src="./umd/xgplayer-hls.min.js"></script>
   <script src="./umd/xgplayer-flv.min.js"></script>
+  <script src="./umd/xgplayer-mp4.min.js"></script>
   <script>
     (function () {
       'use strict'
@@ -1180,6 +1182,7 @@
       var wasmSource = 'cdn'
       var wasmProbe = null
       var playerPhase = 'idle'
+      var currentFormat = ''
 
       /* ===== helpers ===== */
       function sanitizeLog(message) {
@@ -1270,10 +1273,11 @@
       }
 
       function resolveFormat(url, fmt) {
-        if (fmt === 'flv' || fmt === 'hls') return fmt
+        if (fmt === 'flv' || fmt === 'hls' || fmt === 'mp4') return fmt
         if (/^wss?:\/\//i.test(url)) return 'flv'
         if (/\.m3u8(\?|#|$)/i.test(url)) return 'hls'
         if (/\.flv(\?|#|$)/i.test(url)) return 'flv'
+        if (/\.mp4(\?|#|$)/i.test(url)) return 'mp4'
         return ''
       }
 
@@ -1347,7 +1351,8 @@
         if (!player || !player.plugins) return null
         var h = player.plugins.hls && player.plugins.hls.core
         var f = player.plugins.flv && player.plugins.flv.core
-        return h || f || null
+        var m = player.plugins.mp4 && player.plugins.mp4.core
+        return m || h || f || null
       }
 
       function setText(id, value) {
@@ -1419,7 +1424,7 @@
         setText(
           's-resolution',
           media.videoWidth
-            ? res + ' · ' + (liveInput.checked ? 'Live' : 'VOD')
+            ? res + ' · ' + (currentFormat === 'mp4' || !liveInput.checked ? 'VOD' : 'Live')
             : 'Waiting for video'
         )
         setText('s-variant', (stats && stats.variant) || '—')
@@ -1500,6 +1505,13 @@
           log('❌ window.FlvPlayer is missing')
           return
         }
+        if (fmt === 'mp4' && !window.MP4Player) {
+          showAlert('MP4 plugin failed to load; check umd/xgplayer-mp4.min.js.')
+          showErrorState()
+          setPlayState('Replay', false)
+          log('❌ window.MP4Player is missing')
+          return
+        }
         if (wasmSource === 'unavailable') {
           log('⚠️ wasm unavailable; software decoding disabled')
         }
@@ -1507,6 +1519,15 @@
         var softDecode = mode === 'auto' ? 'auto' : mode === 'true'
         if (wasmSource === 'unavailable') softDecode = false
         var softOptions = wasmSource === 'local' ? { wasmBaseUrl: './wasm' } : undefined
+
+        var mp4Options = null
+        if (fmt === 'mp4') {
+          mp4Options = { softDecode: softDecode }
+          if (softOptions && window.SoftDecode && typeof window.SoftDecode.createSoftSinkFactory === 'function') {
+            mp4Options.createSoftSink = window.SoftDecode.createSoftSinkFactory(softOptions)
+          }
+        }
+        currentFormat = fmt
 
         var modeText = softDecode === 'auto' ? 'Auto' : softDecode ? 'Force software' : 'Hardware only'
         log('🚀 Creating player [' + fmt + '] · decode=' + modeText +
@@ -1523,11 +1544,12 @@
             url: url,
             width: '100%',
             height: '100%',
-            isLive: liveInput.checked,
-            autoplay: true,
+            isLive: fmt === 'mp4' ? false : liveInput.checked,
+            autoplay: fmt === 'mp4' ? false : true,
             autoplayMuted: mutedInput.checked,
             playsinline: true,
-            plugins: [fmt === 'hls' ? window.HlsPlayer : window.FlvPlayer],
+            plugins: [fmt === 'hls' ? window.HlsPlayer : fmt === 'flv' ? window.FlvPlayer : window.MP4Player],
+            mp4: mp4Options,
             softDecode: softDecode,
             softDecodeOptions: softOptions,
             onSoftDecodeFallback: function (info) {
@@ -1550,6 +1572,23 @@
           return
         }
         window._player = player
+
+        if (fmt === 'mp4') {
+          var mp4WaitStart = Date.now()
+          var startMp4 = function () {
+            if (!alive() || !player) return
+            var core = player.plugins.mp4 && player.plugins.mp4.core
+            var stats = core && core.softDecodeStats
+            var mse = !!(core && core._bufferService && core._bufferService._mse)
+            var decoded = !!(stats && stats.decoded > 0)
+            if (!decoded && !mse && Date.now() - mp4WaitStart < 8000) {
+              setTimeout(startMp4, 200)
+              return
+            }
+            player.play().catch(function () { })
+          }
+          setTimeout(startMp4, 300)
+        }
 
         function finishLoading() {
           if (!alive()) return
@@ -1622,10 +1661,11 @@
 
         var fmt = resolveFormat(url, getRadio('fmt'))
         if (!fmt) {
-          showAlert('Cannot determine the format from the URL; choose "FLV / WS" or "HLS".')
+          showAlert('Cannot determine the format from the URL; choose "FLV / WS", "HLS" or "MP4".')
           return
         }
 
+        if (fmt === 'mp4') liveInput.checked = false
         var mode = getRadio('mode')
         destroyPlayer(true)
         var token = ++buildToken
@@ -1670,7 +1710,7 @@
       if (params.get('url')) urlInput.value = params.get('url')
 
       var fmtParam = (params.get('fmt') || '').toLowerCase()
-      if (fmtParam === 'auto' || fmtParam === 'flv' || fmtParam === 'hls') setRadio('fmt', fmtParam)
+      if (fmtParam === 'auto' || fmtParam === 'flv' || fmtParam === 'hls' || fmtParam === 'mp4') setRadio('fmt', fmtParam)
 
       var modeParam = (params.get('mode') || '').toLowerCase()
       if (modeParam === 'soft' || modeParam === 'true' || modeParam === '1') setRadio('mode', 'true')

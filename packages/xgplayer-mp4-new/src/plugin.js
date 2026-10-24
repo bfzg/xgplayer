@@ -1,38 +1,48 @@
-import { BasePlugin, Events, Errors } from 'xgplayer'
+import { BasePlugin, Errors, Events } from 'xgplayer'
 import { EVENT } from 'xgplayer-streaming-shared'
 import { MP4 } from './mp4'
 
 export class MP4Plugin extends BasePlugin {
   static MP4 = MP4
+  static isStreamingPlugin = true
 
-  static get pluginName () {
+  static get pluginName() {
     return 'mp4'
   }
 
   mp4 = null
 
-  get core () {
+  get core() {
     return this.mp4
   }
 
-  get version () {
+  get version() {
     return MP4.version
   }
 
-  get softDecode () {
+  get softDecode() {
     const mediaType = this.player?.config?.mediaType
     return !!mediaType && mediaType !== 'video' && mediaType !== 'offscreen-video'
   }
 
-  beforePlayerInit () {
+  beforePlayerInit() {
     const config = this.player.config
     if (this.mp4) this.mp4.destroy()
+    // The plugin owns the media source (MSE or the wasm SoftSink). Letting the
+    // core assign the raw MP4 URL would make the browser try to decode HEVC
+    // natively and race the soft sink for the same <video> element.
+    this.player.handleSource = false
     this.player.switchURL = this._onSwitchURL
 
     const mp4Config = config.mp4 || {}
+    const createSoftSink =
+      typeof mp4Config.createSoftSink === 'function' ? mp4Config.createSoftSink : null
+    const softDecode =
+      mp4Config.softDecode === undefined ? this.softDecode : mp4Config.softDecode
 
     this.mp4 = new MP4({
-      softDecode: this.softDecode,
+      softDecode,
+      createSoftSink,
       media: this.player.video,
       url: config.url,
       ...mp4Config
@@ -65,7 +75,7 @@ export class MP4Plugin extends BasePlugin {
     }
   }
 
-  static isSupported (softDecode) {
+  static isSupported(softDecode) {
     return MP4.isSupported(softDecode)
   }
 
@@ -103,7 +113,7 @@ export class MP4Plugin extends BasePlugin {
     if (this.mp4) this.mp4.load(to)
   }
 
-  _transError () {
+  _transError() {
     this.mp4.on(EVENT.ERROR, (err) => {
       if (this.player) {
         this.player.emit(Events.ERROR, new Errors(this.player, err))
