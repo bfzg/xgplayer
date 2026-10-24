@@ -1,273 +1,1691 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>xgplayer HEVC 软解 Demo</title>
-  <link rel="icon" href="data:,">
+  <meta name="description" content="xgplayer H.265 软解演示：FLV / WS-FLV / HLS，硬解优先、wasm 自动回退。">
+  <meta name="theme-color" content="#0084d1">
+  <meta property="og:title" content="xgplayer HEVC 软解演示">
+  <meta property="og:description" content="FLV / WS-FLV / HLS · 硬解优先 · wasm 自动回退">
+  <title>xgplayer HEVC 软解演示 · FLV / WS-FLV / HLS</title>
+  <link rel="icon"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23e6f6fc'/%3E%3Cpath d='M26 19l21 13-21 13z' fill='%230084d1'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="./umd/xgplayer.min.css">
   <style>
-    :root { --line: #d8dce1; --muted: #6b7280; --ink: #1f2328; --accent: #1a73e8; }
-    * { box-sizing: border-box; }
-    body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--ink); background: #f6f7f9; }
-    header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--line); }
-    h1 { font-size: 16px; margin: 0; font-weight: 600; }
-    h1 small { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 8px; }
-    .badge { padding: 2px 10px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; background: #f2f3f5; color: var(--muted); }
-    .badge.ok { background: #e8f5ec; border-color: #b7e0c4; color: #15703a; }
-    .badge.fail { background: #fdecec; border-color: #f2c4c4; color: #a51e1e; }
-    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 20px; background: #fff; border-bottom: 1px solid var(--line); }
-    .controls input, .controls select { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; background: #fff; min-width: 0; }
-    .controls input[type="url"] { flex: 1; min-width: 300px; }
-    .controls label { font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
-    .controls label input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; }
-    .btn { padding: 6px 16px; border: 1px solid var(--line); border-radius: 4px; font: inherit; cursor: pointer; background: #fff; }
-    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .btn-primary:hover { background: #1557b0; }
-    .btn-danger { background: #d93025; border-color: #d93025; color: #fff; }
-    .btn-danger:hover { background: #b3261e; }
-    main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px; }
-    @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
-    #player-container { width: 100%; min-height: 400px; background: #000; border-radius: 6px; overflow: hidden; }
-    .panel { background: #fff; border: 1px solid var(--line); border-radius: 6px; }
-    .panel + .panel { margin-top: 12px; }
-    .panel h2 { font-size: 12px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); font-weight: 600; color: var(--muted); }
-    .stats { display: grid; grid-template-columns: 90px 1fr; gap: 4px 8px; margin: 0; padding: 10px 12px; font-size: 13px; }
-    .stats dt { color: var(--muted); }
-    .stats dd { margin: 0; font-variant-numeric: tabular-nums; word-break: break-all; }
-    #log { height: 200px; overflow: auto; margin: 0; padding: 8px 12px; font: 12px/1.6 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
-    .probe { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
-    .info-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 20px; background: #fff8e1; font-size: 12px; border-bottom: 1px solid var(--line); }
-    .info-bar .tag { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 11px; }
-    .tag-local { background: #e8f5ec; color: #15703a; }
-    .tag-cdn { background: #e3f2fd; color: #0d47a1; }
-    .tag-offline { background: #fdecec; color: #a51e1e; }
+    :root {
+      --bg: #f4f7fb;
+      --bg-soft: #eef3fa;
+      --panel: #ffffff;
+      --panel-soft: #f8fafd;
+      --line: #e3e9f2;
+      --line-strong: #d4ddea;
+      --ink: #172033;
+      --muted: #5f6f86;
+      --muted-2: #8a97ab;
+      --accent: #0084d1;
+      --accent-strong: #006a9f;
+      --accent-soft: #e6f6fc;
+      --ok: #119a55;
+      --ok-soft: #e9f8f1;
+      --warn: #b7791f;
+      --warn-soft: #fdf6e6;
+      --bad: #d3455b;
+      --bad-soft: #fdeef1;
+      --stage-bg: #e9eef7;
+      --radius-lg: 20px;
+      --radius: 14px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      color-scheme: light;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font: 14px/1.55 var(--font);
+      color: var(--ink);
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .page {
+      width: min(1480px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 22px 0 40px;
+    }
+
+    /* ---------- header ---------- */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 22px;
+      padding: 4px 2px 22px;
+    }
+
+    .brand-mark {
+      width: 46px;
+      height: 46px;
+      flex: none;
+      border-radius: 15px;
+      display: grid;
+      place-items: center;
+      background: var(--accent);
+    }
+
+    .brand-mark svg {
+      width: 21px;
+      height: 21px;
+      display: block;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      line-height: 1.25;
+      color: var(--ink);
+    }
+
+    .brand p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 12.5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .env {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .chip b {
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    a.chip.lang-switch {
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    a.chip.lang-switch:hover {
+      text-decoration: none;
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .chip .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted-2);
+      flex: none;
+    }
+
+    .chip.ok {
+      background: var(--ok-soft);
+      border-color: #c6ead7;
+    }
+
+    .chip.ok .dot {
+      background: var(--ok);
+    }
+
+    .chip.ok b {
+      color: #137a48;
+    }
+
+    .chip.warn {
+      background: var(--warn-soft);
+      border-color: #f0dfb5;
+    }
+
+    .chip.warn .dot {
+      background: var(--warn);
+    }
+
+    .chip.warn b {
+      color: #8a6114;
+    }
+
+    .chip.bad {
+      background: var(--bad-soft);
+      border-color: #f3c7ce;
+    }
+
+    .chip.bad .dot {
+      background: var(--bad);
+    }
+
+    .chip.bad b {
+      color: #a3283a;
+    }
+
+    /* ---------- layout ---------- */
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 382px;
+      gap: 22px;
+      align-items: start;
+    }
+
+    .side {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    /* ---------- stage ---------- */
+    .stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      isolation: isolate;
+    }
+
+    #player-container {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #player-container .xgplayer {
+      width: 100%;
+      height: 100%;
+    }
+
+    .stage-status {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 24px;
+      text-align: center;
+      background: var(--panel-soft);
+      pointer-events: none;
+    }
+
+    .stage-status[hidden] {
+      display: none;
+    }
+
+    .stage-status strong {
+      font-size: 15px;
+      color: var(--ink);
+    }
+
+    .stage-status span:last-child {
+      color: var(--muted);
+      font-size: 12.5px;
+      max-width: 420px;
+    }
+
+    .stage-status.error strong {
+      color: #a3283a;
+    }
+
+    .status-spinner {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 3px solid #cceaf5;
+      border-top-color: var(--accent);
+      animation: spin 0.8s linear infinite;
+    }
+
+    .stage-status.error .status-spinner {
+      display: none;
+    }
+
+    .alert {
+      display: flex;
+      gap: 9px;
+      margin-top: 12px;
+      padding: 11px 14px;
+      border: 1px solid #f3c7ce;
+      border-radius: 12px;
+      background: var(--bad-soft);
+      color: #a3283a;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .alert[hidden] {
+      display: none;
+    }
+
+    /* ---------- composer ---------- */
+    .composer {
+      margin-top: 16px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--panel);
+    }
+
+    .url-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+    }
+
+    .url-field {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .url-field>span {
+      font-size: 11.5px;
+      letter-spacing: 0.6px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .url-field input {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: #ffffff;
+      color: var(--ink);
+      font: 14px/1.45 var(--mono);
+      outline: none;
+      transition: border-color 0.18s ease;
+    }
+
+    .url-field input::placeholder {
+      color: #9aa7b9;
+    }
+
+    .url-field input:focus {
+      border-color: var(--accent);
+      outline: 2px solid rgba(0, 132, 209, 0.25);
+      outline-offset: 1px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 14px 19px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      font: 600 14px/1 var(--font);
+      white-space: nowrap;
+      cursor: pointer;
+      transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease,
+        opacity 0.16s ease;
+    }
+
+    .btn svg {
+      width: 14px;
+      height: 14px;
+      flex: none;
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn-primary {
+      color: #ffffff;
+      background: var(--accent);
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-strong);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.62;
+      cursor: progress;
+      transform: none;
+    }
+
+    .btn-ghost {
+      color: var(--muted);
+      border-color: var(--line-strong);
+      background: var(--panel);
+    }
+
+    .btn-ghost:hover {
+      color: var(--ink);
+      background: var(--panel-soft);
+    }
+
+    .link-btn {
+      padding: 0;
+      border: 0;
+      background: none;
+      color: var(--accent);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .link-btn:hover {
+      color: var(--accent-strong);
+      text-decoration: underline;
+    }
+
+    .options {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px dashed var(--line-strong);
+    }
+
+    .option {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      min-width: 0;
+    }
+
+    .option legend {
+      padding: 0 0 7px;
+      color: var(--muted);
+      font-size: 11.5px;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+    }
+
+    .decode-option {
+      flex: 1 1 430px;
+    }
+
+    .segmented {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .segmented label {
+      position: relative;
+      display: block;
+      cursor: pointer;
+    }
+
+    .segmented input {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .segmented span {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      padding: 8px 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      background: #ffffff;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 500;
+      transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+
+    .segmented span:hover {
+      color: var(--ink);
+      border-color: #b9c5d8;
+    }
+
+    .segmented input:checked+span {
+      color: var(--accent-strong);
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .segmented input:focus-visible+span {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .segmented.cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .segmented.cards span {
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-start;
+      gap: 2px;
+      padding: 10px 12px;
+      text-align: left;
+    }
+
+    .segmented.cards b {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    .segmented.cards small {
+      color: var(--muted-2);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .segmented.cards input:checked+span b {
+      color: var(--accent-strong);
+    }
+
+    .segmented.cards input:checked+span small {
+      color: #2f7e9d;
+    }
+
+    .toggles {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 18px;
+      margin-left: auto;
+      padding-bottom: 8px;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 13px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .switch input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+    }
+
+    .switch .track {
+      position: relative;
+      width: 38px;
+      height: 22px;
+      flex: none;
+      border-radius: 999px;
+      background: #d9e0ec;
+      transition: background 0.18s ease;
+    }
+
+    .switch .track::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #ffffff;
+      transition: transform 0.18s ease;
+    }
+
+    .switch input:checked+.track {
+      background: var(--accent);
+    }
+
+    .switch input:checked+.track::after {
+      transform: translateX(16px);
+    }
+
+    .switch input:focus-visible+.track {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* ---------- side cards ---------- */
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .card-head h2 {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .state-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 11.5px;
+      font-weight: 600;
+    }
+
+    .state-chip .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--muted-2);
+    }
+
+    .state-chip.on {
+      color: #137a48;
+      border-color: #c6ead7;
+      background: var(--ok-soft);
+    }
+
+    .state-chip.on .dot {
+      background: var(--ok);
+    }
+
+    .state-chip.soft {
+      color: #006a9f;
+      border-color: #a9dff0;
+      background: #e8f7fc;
+    }
+
+    .state-chip.soft .dot {
+      background: var(--accent);
+    }
+
+    .state-chip.paused {
+      color: #8a6114;
+      border-color: #f0dfb5;
+      background: var(--warn-soft);
+    }
+
+    .state-chip.paused .dot {
+      background: var(--warn);
+    }
+
+    .state-chip.bad {
+      color: #a3283a;
+      border-color: #f3c7ce;
+      background: var(--bad-soft);
+    }
+
+    .state-chip.bad .dot {
+      background: var(--bad);
+    }
+
+    .decode-hero {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      padding: 16px;
+    }
+
+    .decode-icon {
+      width: 46px;
+      height: 46px;
+      flex: none;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+      color: var(--muted);
+      font: 700 12px/1 var(--mono);
+      letter-spacing: 0.5px;
+      transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    }
+
+    .decode-icon.soft {
+      color: #006a9f;
+      border-color: #a9dff0;
+      background: #e8f7fc;
+    }
+
+    .decode-icon.hard {
+      color: #0d7490;
+      border-color: #bfe6ef;
+      background: #e9f8fb;
+    }
+
+    .decode-hero strong {
+      display: block;
+      font-size: 15px;
+      line-height: 1.3;
+      color: var(--ink);
+    }
+
+    .decode-hero small {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      padding: 0 16px 14px;
+    }
+
+    .stat {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--panel-soft);
+    }
+
+    .stat span {
+      display: block;
+      color: var(--muted-2);
+      font-size: 11px;
+    }
+
+    .stat b {
+      display: block;
+      margin-top: 2px;
+      font: 600 16px/1.2 var(--mono);
+      color: var(--ink);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .meta {
+      margin: 0;
+      padding: 0 16px 16px;
+    }
+
+    .meta>div {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 7px 0;
+      border-top: 1px solid var(--line);
+      font-size: 12.5px;
+    }
+
+    .meta>div:first-child {
+      border-top: 0;
+    }
+
+    .meta dt {
+      color: var(--muted-2);
+      flex: none;
+    }
+
+    .meta dd {
+      margin: 0;
+      min-width: 0;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12px;
+      text-align: right;
+      word-break: break-all;
+    }
+
+    .log-card {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .log-card .card-head {
+      padding-top: 11px;
+      padding-bottom: 11px;
+    }
+
+    #log {
+      margin: 0;
+      padding: 11px 14px 14px;
+      height: 190px;
+      overflow: auto;
+      color: #506078;
+      background: var(--panel-soft);
+      font: 11.5px/1.65 var(--mono);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      scrollbar-width: thin;
+      scrollbar-color: #c8d2e2 transparent;
+    }
+
+    #log::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    #log::-webkit-scrollbar-thumb {
+      background: #c8d2e2;
+      border-radius: 4px;
+    }
+
+    .tips-card {
+      padding: 14px 16px 15px;
+    }
+
+    .tips-card h2 {
+      margin: 0 0 8px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .tips-card ul {
+      margin: 0;
+      padding-left: 16px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tips-card li+li {
+      margin-top: 5px;
+    }
+
+    .tips-card code {
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: #eef2f8;
+      color: #006a9f;
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 26px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted-2);
+      font-size: 12px;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.001ms !important;
+        transition-duration: 0.001ms !important;
+      }
+    }
+
+    @media (max-width: 1180px) {
+      .layout {
+        grid-template-columns: minmax(0, 1fr) 340px;
+      }
+
+      .page {
+        width: min(1480px, calc(100% - 36px));
+      }
+    }
+
+    @media (max-width: 1020px) {
+      .layout {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .side {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .tips-card {
+        grid-column: 1 / -1;
+      }
+
+      .brand p {
+        white-space: normal;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .page {
+        width: calc(100% - 24px);
+        padding-top: 14px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .env {
+        justify-content: flex-start;
+      }
+
+      .brand h1 {
+        font-size: 18px;
+      }
+
+      .side {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .url-row {
+        flex-wrap: wrap;
+      }
+
+      .url-field {
+        flex-basis: 100%;
+      }
+
+      .url-row .btn {
+        flex: 1;
+      }
+
+      .options {
+        gap: 14px;
+      }
+
+      .decode-option {
+        flex-basis: 100%;
+      }
+
+      .segmented.cards {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .toggles {
+        margin-left: 0;
+        padding-bottom: 0;
+      }
+
+      #log {
+        height: 150px;
+      }
+
+      footer {
+        display: block;
+      }
+
+      footer span {
+        display: block;
+      }
+
+      footer span+span {
+        margin-top: 4px;
+      }
+    }
   </style>
 </head>
+
 <body>
-  <header>
-    <h1>🎬 xgplayer HEVC 软解 Demo <small>FLV / HLS · 硬解优先·自动回退</small></h1>
-    <div class="probe" id="probe"></div>
-  </header>
-  <div class="info-bar" id="infoBar">
-    <span id="wasmSource">⏳ 检测 wasm 资源...</span>
-    <span id="httpInfo"></span>
-  </div>
-
-  <form class="controls" onsubmit="return false">
-    <input type="url" id="url" placeholder="播放地址，如 https://example.com/live/stream.flv、ws://host/live/stream.flv 或 xxx.m3u8" value="">
-    <select id="fmt">
-      <option value="auto">自动识别</option>
-      <option value="flv">FLV</option>
-      <option value="hls">HLS</option>
-    </select>
-    <select id="mode">
-      <option value="auto">自动（硬解优先→软解回退）</option>
-      <option value="true">强制软解</option>
-      <option value="false">仅硬解</option>
-    </select>
-    <label><input type="checkbox" id="live" checked> 直播</label>
-    <label><input type="checkbox" id="muted" checked> 静音</label>
-    <button class="btn btn-primary" id="playBtn">▶ 播放</button>
-    <button class="btn btn-danger" id="stopBtn">■ 停止</button>
-  </form>
-
-  <main>
-    <div id="player-container"></div>
-    <aside>
-      <section class="panel">
-        <h2>解码状态</h2>
-        <div class="stats" id="stats">
-          <dt>解码方式</dt><dd id="s-decode">-</dd>
-          <dt>wasm 变体</dt><dd id="s-variant">-</dd>
-          <dt>已解码</dt><dd id="s-decoded">0</dd>
-          <dt>已渲染</dt><dd id="s-rendered">0</dd>
-          <dt>丢帧</dt><dd id="s-dropped">0</dd>
-          <dt>播放时间</dt><dd id="s-time">00:00 / 00:00</dd>
-          <dt>状态</dt><dd id="s-state">-</dd>
+  <div class="page">
+    <header class="topbar">
+      <div class="brand">
+        <div>
+          <h1>xgplayer HEVC 软解演示</h1>
+          <p>FLV / WS-FLV / HLS · 硬解优先 · wasm 自动回退</p>
         </div>
+      </div>
+      <div class="env">
+        <span class="chip" id="pageChip"><span class="dot"></span>页面 <b>HTTP</b></span>
+        <span class="chip" id="wasmChip" title="软解需要的 WebAssembly 资源"><span class="dot"></span>wasm <b>检测中</b></span>
+        <span class="chip" id="hevcChip" title="浏览器对 H.265 的 MSE 硬解能力"><span class="dot"></span>H.265 硬解
+          <b>检测中</b></span>
+        <a class="chip lang-switch" href="./en.html">English</a>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="main-col">
+        <div class="stage" id="stage">
+          <div id="player-container"></div>
+          <div class="stage-status" id="stageStatus" hidden>
+            <span class="status-spinner"></span>
+            <strong id="stageStatusTitle">正在拉流…</strong>
+            <span id="stageStatusHint">H.265 首次软解需要加载 wasm，请稍候</span>
+          </div>
+        </div>
+
+        <div class="alert" id="alert" hidden></div>
+
+        <form class="composer" id="composer" autocomplete="off">
+          <div class="url-row">
+            <label class="url-field" for="url">
+              <span>播放地址</span>
+              <input id="url" name="url" type="text" inputmode="url" spellcheck="false"
+                placeholder="https://…/live.flv · ws://…/live.flv · https://…/index.m3u8">
+            </label>
+            <button class="btn btn-primary" id="playBtn" type="submit">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M8 5.5 19 12 8 18.5V5.5Z" fill="currentColor" />
+              </svg>
+              <span id="playLabel">开始播放</span>
+            </button>
+            <button class="btn btn-ghost" id="stopBtn" type="button">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" />
+              </svg>
+              停止
+            </button>
+          </div>
+
+          <div class="options">
+            <div class="toggles">
+              <label class="switch">
+                <input type="checkbox" id="live" checked>
+                <span class="track"></span>
+                <span>直播流</span>
+              </label>
+              <label class="switch">
+                <input type="checkbox" id="muted" checked>
+                <span class="track"></span>
+                <span>静音播放</span>
+              </label>
+            </div>
+            <div style="height: 14px;"></div>
+            <fieldset class="option">
+              <legend>流格式</legend>
+              <div class="segmented cards" role="radiogroup" aria-label="流格式">
+                <label><input type="radio" name="fmt" value="auto" checked>
+                  <span><b>自动</b><small>根据流地址的后缀识别</small></span>
+                </label>
+                <label><input type="radio" name="fmt" value="flv"> <span><b>FLV /
+                      WS</b><small>支持ws-flv,http-flv</small></span>
+                </label>
+                <label><input type="radio" name="fmt" value="hls"><span><b>HLS</b><small>支持ts,mp4</small></span></label>
+              </div>
+            </fieldset>
+            <div style="height: 14px;"></div>
+            <fieldset class="option decode-option">
+              <legend>解码模式</legend>
+              <div class="segmented cards" role="radiogroup" aria-label="解码模式">
+                <label>
+                  <input type="radio" name="mode" value="auto" checked>
+                  <span><b>自动</b><small>硬解优先，不支持时软解</small></span>
+                </label>
+                <label>
+                  <input type="radio" name="mode" value="true">
+                  <span><b>强制软解</b><small>wasm 解码 H.265</small></span>
+                </label>
+                <label>
+                  <input type="radio" name="mode" value="false">
+                  <span><b>仅硬解</b><small>浏览器原生解码</small></span>
+                </label>
+              </div>
+            </fieldset>
+
+
+          </div>
+        </form>
       </section>
-      <section class="panel">
-        <h2>日志</h2>
-        <pre id="log">等待播放...</pre>
-      </section>
-    </aside>
-  </main>
+
+      <aside class="side">
+        <section class="card">
+          <div class="card-head">
+            <h2>解码状态</h2>
+            <span class="state-chip" id="stateChip"><span class="dot"></span><span id="stateChipText">待机</span></span>
+          </div>
+          <div class="decode-hero">
+            <span class="decode-icon" id="decodeIcon">HW</span>
+            <div>
+              <strong id="s-decode">未开始</strong>
+              <small id="s-resolution">等待播放</small>
+            </div>
+          </div>
+          <div class="stat-grid">
+            <div class="stat"><span>已解码</span><b id="s-decoded">0</b></div>
+            <div class="stat"><span>已渲染</span><b id="s-rendered">0</b></div>
+            <div class="stat"><span>丢帧</span><b id="s-dropped">0</b></div>
+          </div>
+          <dl class="meta">
+            <div>
+              <dt>播放时间</dt>
+              <dd id="s-time">00:00 / 00:00</dd>
+            </div>
+            <div>
+              <dt>直播延迟</dt>
+              <dd id="s-latency">—</dd>
+            </div>
+            <div>
+              <dt>播放状态</dt>
+              <dd id="s-state">待机</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="card log-card">
+          <div class="card-head">
+            <h2>运行日志</h2>
+            <button class="link-btn" id="clearLog" type="button">清空</button>
+          </div>
+          <pre id="log">等待播放…</pre>
+        </section>
+
+        <section class="card tips-card">
+          <h2>小贴士</h2>
+          <ul>
+            <li>H.265 硬解取决于浏览器；不支持时会下载约 1 MB 的 wasm 软解，首次起播稍慢。</li>
+            <li>HTTPS 页面只能播放 <code>https://</code> 或 <code>wss://</code>；<code>ws://</code> 会被浏览器拦截。</li>
+            <li>流地址需要允许跨域（CORS），否则只能看到网络错误。</li>
+            <li>支持 <code>?url=...&amp;fmt=flv&amp;mode=auto</code> 直接打开演示。</li>
+          </ul>
+        </section>
+      </aside>
+    </main>
+
+    <footer>
+      <span>基于 <a href="https://github.com/bfzg/xgplayer" target="_blank" rel="noreferrer">xgplayer</a> +
+        xgplayer-soft-decode</span>
+      <span>H.265 软解使用 wasm，无需浏览器原生支持</span>
+    </footer>
+  </div>
 
   <script src="./umd/xgplayer.min.js"></script>
   <script src="./umd/xgplayer-soft-decode.min.js"></script>
   <script src="./umd/xgplayer-hls.min.js"></script>
   <script src="./umd/xgplayer-flv.min.js"></script>
   <script>
-  (function () {
-    /* ===== helpers ===== */
-    var $ = function (id) { return document.getElementById(id) }
-    var logEl = $('log')
-    function log(msg) {
-      logEl.textContent += '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n'
-      logEl.scrollTop = logEl.scrollHeight
-    }
-    function fmtTime(sec) {
-      if (!isFinite(sec) || sec <= 0) return '00:00'
-      var m = Math.floor(sec / 60); var s = Math.floor(sec % 60)
-      return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s
-    }
+    (function () {
+      'use strict'
 
-    /* ===== 检测 wasm 来源 ===== */
-    function checkWasm() {
-      var info = $('wasmSource')
-      var http = $('httpInfo')
+      /* ===== DOM ===== */
+      var $ = function (id) { return document.getElementById(id) }
+      var stage = $('stage')
+      var stageStatus = $('stageStatus')
+      var stageStatusTitle = $('stageStatusTitle')
+      var stageStatusHint = $('stageStatusHint')
+      var alertEl = $('alert')
+      var urlInput = $('url')
+      var playBtn = $('playBtn')
+      var playLabel = $('playLabel')
+      var stopBtn = $('stopBtn')
+      var logEl = $('log')
+      var composer = $('composer')
+      var liveInput = $('live')
+      var mutedInput = $('muted')
 
-      // 检测是否走 HTTP 服务（非 file://）
-      if (location.protocol === 'file:') {
-        info.innerHTML = '⚠️ <b>file:// 协议</b>：wasm 无法加载，请用 HTTP 服务打开'
-        info.className = 'tag tag-offline'
-        http.textContent = ''
-        return
+      var player = null
+      var buildToken = 0
+      var buildTimer = null
+      var logLines = []
+      var wasmSource = 'cdn'
+      var wasmProbe = null
+      var playerPhase = 'idle'
+
+      /* ===== helpers ===== */
+      function sanitizeLog(message) {
+        var text = String(message).replace(
+          /([?&](?:token|access_token|auth|key|secret|wsSecret|wsTime)=)([^&#\s]+)/gi,
+          '$1***'
+        )
+        return text.length > 220 ? text.slice(0, 217) + '…' : text
       }
-      http.textContent = '✓ 协议: ' + location.protocol
 
-      // 检测本地 wasm 文件
-      var xhr = new XMLHttpRequest()
-      xhr.open('HEAD', './wasm/decode/hevc-simd.wasm', true)
-      xhr.onload = function () {
-        if (xhr.status === 200) {
-          info.innerHTML = '📁 wasm 来源: <b class="tag tag-local">本地文件</b>（离线可用）'
-          log('📁 检测到本地 wasm，将使用本地文件')
+      function log(msg) {
+        var time = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+        logLines.push('[' + time + '] ' + sanitizeLog(msg))
+        if (logLines.length > 200) logLines.shift()
+        logEl.textContent = logLines.join('\n')
+        logEl.scrollTop = logEl.scrollHeight
+      }
+
+      function fmtTime(sec) {
+        if (!isFinite(sec) || sec <= 0) return '00:00'
+        var m = Math.floor(sec / 60)
+        var s = Math.floor(sec % 60)
+        return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s
+      }
+
+      function textOfError(error) {
+        if (!error) return '未知错误'
+        if (typeof error === 'string') return error
+        if (error.message) return error.message
+        try { return JSON.stringify(error) } catch (e) { return String(error) }
+      }
+
+      function showAlert(message) {
+        alertEl.textContent = '⚠ ' + message
+        alertEl.hidden = false
+      }
+
+      function clearAlert() {
+        alertEl.hidden = true
+        alertEl.textContent = ''
+      }
+
+      function showStageStatus(type, title, hint) {
+        stage.classList.add('is-loading')
+        stageStatus.hidden = false
+        stageStatus.className = 'stage-status' + (type === 'error' ? ' error' : '')
+        stageStatusTitle.textContent = title
+        stageStatusHint.textContent = hint
+      }
+
+      function showLoading() {
+        showStageStatus('loading', '正在拉流…', 'H.265 首次软解需要加载 wasm，请稍候')
+      }
+
+      function showErrorState() {
+        showStageStatus('error', '播放失败', '请检查地址、跨域（CORS）或网络连接，详情见下方日志。')
+      }
+
+      function hideStageStatus() {
+        stage.classList.remove('is-loading')
+        stageStatus.hidden = true
+      }
+
+      function setPlayState(label, disabled) {
+        playLabel.textContent = label
+        playBtn.disabled = !!disabled
+      }
+
+      function setChip(id, state, label, title) {
+        var chip = $(id)
+        chip.className = 'chip ' + (state || '')
+        chip.innerHTML = '<span class="dot"></span>' + label
+        if (title) chip.title = title
+      }
+
+      function getRadio(name) {
+        var el = document.querySelector('input[name="' + name + '"]:checked')
+        return el ? el.value : ''
+      }
+
+      function setRadio(name, value) {
+        var el = document.querySelector('input[name="' + name + '"][value="' + value + '"]')
+        if (el) el.checked = true
+      }
+
+      function hasScheme(url) {
+        return /^(https?|wss?):\/\//i.test(url)
+      }
+
+      function resolveFormat(url, fmt) {
+        if (fmt === 'flv' || fmt === 'hls') return fmt
+        if (/^wss?:\/\//i.test(url)) return 'flv'
+        if (/\.m3u8(\?|#|$)/i.test(url)) return 'hls'
+        if (/\.flv(\?|#|$)/i.test(url)) return 'flv'
+        return ''
+      }
+
+      /* ===== environment probes ===== */
+      function probePage() {
+        var secure = location.protocol === 'https:'
+        setChip(
+          'pageChip',
+          secure ? 'ok' : '',
+          '页面 <b>' + (secure ? 'HTTPS' : location.protocol === 'file:' ? 'FILE' : 'HTTP') + '</b>',
+          secure ? 'HTTPS 页面不能播放 ws://，请使用 wss:// 或 https://' : 'HTTP 页面可以播放 ws:// 与 http://'
+        )
+      }
+
+      function probeWasm() {
+        if (location.protocol === 'file:') {
+          wasmSource = 'unavailable'
+          setChip('wasmChip', 'bad', 'wasm <b>需 HTTP</b>', 'file:// 无法加载 wasm')
+          log('⚠️ file:// 协议无法加载 wasm，请用 HTTP 服务打开')
+          wasmProbe = Promise.resolve('unavailable')
+          return wasmProbe
+        }
+        if (typeof WebAssembly === 'undefined') {
+          wasmSource = 'unavailable'
+          setChip('wasmChip', 'bad', 'wasm <b>不支持</b>', '当前浏览器没有 WebAssembly')
+          log('⚠️ 当前浏览器不支持 WebAssembly，软解不可用')
+          wasmProbe = Promise.resolve('unavailable')
+          return wasmProbe
+        }
+
+        setChip('wasmChip', '', 'wasm <b>检测中</b>')
+        wasmProbe = fetch('./wasm/decode/hevc-simd.wasm', { method: 'HEAD', cache: 'no-store' })
+          .then(function (res) {
+            var type = (res.headers.get('content-type') || '').toLowerCase()
+            if (!res.ok || type.indexOf('html') !== -1) throw new Error('missing')
+            wasmSource = 'local'
+            setChip('wasmChip', 'ok', 'wasm <b>本地</b>', '使用 demo/wasm 下的本地 wasm，可离线')
+            log('📁 wasm 使用本地文件：./wasm')
+            return wasmSource
+          })
+          .catch(function () {
+            wasmSource = 'cdn'
+            setChip('wasmChip', 'warn', 'wasm <b>CDN</b>', '本地 wasm 不存在，回退到 jsDelivr CDN')
+            log('🌐 未检测到本地 wasm，使用 jsDelivr CDN（需联网）')
+            return wasmSource
+          })
+        return wasmProbe
+      }
+
+      function probeHevc() {
+        var support = { hvc1: false, hev1: false }
+        var mediaSource = window.MediaSource || window.ManagedMediaSource
+        try {
+          if (mediaSource && mediaSource.isTypeSupported) {
+            support.hvc1 = mediaSource.isTypeSupported('video/mp4;codecs="hvc1.1.6.L93.B0"')
+            support.hev1 = mediaSource.isTypeSupported('video/mp4;codecs="hev1.1.6.L93.B0"')
+          }
+        } catch (e) { }
+        var ok = support.hvc1 || support.hev1
+        var detail = 'hvc1 ' + (support.hvc1 ? '✅' : '❌') + ' / hev1 ' + (support.hev1 ? '✅' : '❌')
+        setChip(
+          'hevcChip',
+          ok ? 'ok' : 'warn',
+          'H.265 硬解 <b>' + (ok ? '支持' : '不支持') + '</b>',
+          detail + '（不支持时自动走 wasm 软解）'
+        )
+      }
+
+      /* ===== stats ===== */
+      function getCore() {
+        if (!player || !player.plugins) return null
+        var h = player.plugins.hls && player.plugins.hls.core
+        var f = player.plugins.flv && player.plugins.flv.core
+        return h || f || null
+      }
+
+      function setText(id, value) {
+        var el = document.getElementById(id)
+        if (el) el.textContent = value
+      }
+
+      function setStateChip(text, state) {
+        var chip = $('stateChip')
+        if (chip) chip.className = 'state-chip ' + (state || '')
+        setText('stateChipText', text)
+      }
+
+      function resetStats() {
+        var icon = $('decodeIcon')
+        if (icon) {
+          icon.className = 'decode-icon'
+          icon.textContent = 'HW'
+        }
+        setText('s-decode', '未开始')
+        setText('s-resolution', '等待播放')
+        setText('s-variant', '—')
+        setText('s-decoded', '0')
+        setText('s-rendered', '0')
+        setText('s-dropped', '0')
+        setText('s-time', '00:00 / 00:00')
+        setText('s-latency', '—')
+        setText('s-state', '待机')
+        setStateChip('待机', '')
+      }
+
+      function tick() {
+        if (!player || !player.media) return
+        if (playerPhase === 'loading') {
+          setText('s-state', '加载中')
+          setText('s-resolution', '正在连接流…')
+          setStateChip('加载中', '')
+          return
+        }
+        if (playerPhase === 'error') {
+          setText('s-state', '加载失败')
+          setStateChip('加载失败', 'bad')
+          return
+        }
+        var core = getCore()
+        var media = player.media
+        var soft = !!(core && core.isSoftDecoding)
+        var stats = core && core.softDecodeStats
+        var res = media.videoWidth ? media.videoWidth + '×' + media.videoHeight : '—'
+        var duration = isFinite(media.duration) && media.duration > 0 ? fmtTime(media.duration) : '直播'
+        var latency = null
+        var quality = null
+        try {
+          if (typeof player.getLiveLatency === 'function') latency = player.getLiveLatency()
+          else if (core && typeof core.latency === 'number') latency = core.latency
+        } catch (e) { }
+        try {
+          if (typeof media.getVideoPlaybackQuality === 'function') {
+            quality = media.getVideoPlaybackQuality()
+          }
+        } catch (e) { }
+
+        var icon = $('decodeIcon')
+        if (icon) {
+          icon.className = 'decode-icon ' + (soft ? 'soft' : 'hard')
+          icon.textContent = soft ? 'SW' : 'HW'
+        }
+        setText('s-decode', soft ? 'wasm 软解' : '浏览器硬解')
+        setText(
+          's-resolution',
+          media.videoWidth
+            ? res + ' · ' + (liveInput.checked ? '直播' : '点播')
+            : '等待视频画面'
+        )
+        setText('s-variant', (stats && stats.variant) || '—')
+        setText('s-decoded', soft ? ((stats && stats.decoded) || 0) : '—')
+        setText(
+          's-rendered',
+          soft
+            ? ((stats && stats.rendered) || 0)
+            : quality && typeof quality.totalVideoFrames === 'number'
+              ? quality.totalVideoFrames
+              : '—'
+        )
+        setText(
+          's-dropped',
+          soft
+            ? ((stats && stats.dropped) || 0)
+            : quality && typeof quality.droppedVideoFrames === 'number'
+              ? quality.droppedVideoFrames
+              : '—'
+        )
+        setText('s-time', fmtTime(media.currentTime) + ' / ' + duration)
+        setText(
+          's-latency',
+          typeof latency === 'number' && latency > 0 ? latency.toFixed(2) + ' s' : '—'
+        )
+        setText('s-state', media.ended ? '已结束' : media.paused ? '暂停' : '播放中')
+
+        if (media.ended) {
+          setStateChip('已结束', 'paused')
+        } else if (media.paused) {
+          setStateChip('暂停', 'paused')
         } else {
-          fallbackCdn()
+          setStateChip(soft ? '软解中' : '硬解中', soft ? 'soft' : 'on')
         }
       }
-      xhr.onerror = function () {
-        fallbackCdn()
-      }
-      xhr.send()
 
-      function fallbackCdn() {
-        info.innerHTML = '🌐 wasm 来源: <b class="tag tag-cdn">CDN (jsDelivr)</b>（需联网）'
-        log('🌐 未检测到本地 wasm，将从 CDN 加载')
+      /* ===== player ===== */
+      function destroyPlayer(silent) {
+        buildToken++
+        clearTimeout(buildTimer)
+        buildTimer = null
+        if (player) {
+          try { player.destroy() } catch (e) { }
+          player = null
+        }
+        window._player = null
+        playerPhase = 'idle'
+        hideStageStatus()
+        resetStats()
+        setPlayState('开始播放', false)
+        if (!silent) {
+          clearAlert()
+          log('⏹ 已停止播放')
+        }
       }
-    }
-    checkWasm()
 
-    /* ===== 检测 HEVC 硬解支持 ===== */
-    ;(function probe() {
-      var tests = [
-        ['H.265 (hvc1)', 'video/mp4;codecs="hvc1.1.6.L93.B0"'],
-        ['H.265 (hev1)', 'video/mp4;codecs="hev1.1.6.L93.B0"'],
-      ]
-      var html = ''
-      tests.forEach(function (t) {
-        var ok = false
-        try { ok = !!(window.MediaSource && MediaSource.isTypeSupported(t[1])) } catch (e) {}
-        html += '<span class="badge ' + (ok ? 'ok' : 'fail') + '">' + t[0] + ' ' + (ok ? '✅' : '❌') + '</span>'
+      function startPlayer(fmt, mode, url) {
+        var token = buildToken
+        var alive = function () { return token === buildToken }
+        if (!window.Player) {
+          showAlert('播放器脚本加载失败，请检查 umd 资源是否可访问。')
+          showErrorState()
+          setPlayState('重新播放', false)
+          log('❌ window.Player 不存在，无法创建播放器')
+          return
+        }
+        if (fmt === 'hls' && !window.HlsPlayer) {
+          showAlert('HLS 插件加载失败，请检查 umd/xgplayer-hls.min.js。')
+          showErrorState()
+          setPlayState('重新播放', false)
+          log('❌ window.HlsPlayer 不存在')
+          return
+        }
+        if (fmt === 'flv' && !window.FlvPlayer) {
+          showAlert('FLV 插件加载失败，请检查 umd/xgplayer-flv.min.js。')
+          showErrorState()
+          setPlayState('重新播放', false)
+          log('❌ window.FlvPlayer 不存在')
+          return
+        }
+        if (wasmSource === 'unavailable') {
+          log('⚠️ wasm 不可用，软解模式已关闭')
+        }
+
+        var softDecode = mode === 'auto' ? 'auto' : mode === 'true'
+        if (wasmSource === 'unavailable') softDecode = false
+        var softOptions = wasmSource === 'local' ? { wasmBaseUrl: './wasm' } : undefined
+
+        var modeText = softDecode === 'auto' ? '自动' : softDecode ? '强制软解' : '仅硬解'
+        log('🚀 创建播放器 [' + fmt + '] · 解码=' + modeText +
+          ' · ' + (wasmSource === 'local' ? 'wasm 本地' : wasmSource === 'cdn' ? 'wasm CDN' : '无 wasm'))
+
+        clearAlert()
+        playerPhase = 'loading'
+        showLoading()
+        setPlayState('启动中…', true)
+
+        try {
+          player = new window.Player({
+            id: 'player-container',
+            url: url,
+            width: '100%',
+            height: '100%',
+            isLive: liveInput.checked,
+            autoplay: true,
+            autoplayMuted: mutedInput.checked,
+            playsinline: true,
+            plugins: [fmt === 'hls' ? window.HlsPlayer : window.FlvPlayer],
+            softDecode: softDecode,
+            softDecodeOptions: softOptions,
+            onSoftDecodeFallback: function (info) {
+              var reason = info && (info.reason || 'software')
+              var codec = info && info.codec ? ' (' + info.codec + ')' : ''
+              if (info && info.declined) {
+                log('⚠️ 当前编码没有软解后端，保持硬解: ' + reason + codec)
+              } else if (reason === 'forced') {
+                log('🎛 已切换软解: ' + reason + codec)
+              } else {
+                log('🔄 解码回退: ' + reason + codec)
+              }
+            }
+          })
+        } catch (error) {
+          destroyPlayer(true)
+          showAlert('创建播放器失败：' + textOfError(error))
+          showErrorState()
+          log('❌ 创建播放器失败: ' + textOfError(error))
+          return
+        }
+        window._player = player
+
+        function finishLoading() {
+          if (!alive()) return
+          setPlayState('重新播放', false)
+          clearTimeout(buildTimer)
+          buildTimer = null
+        }
+
+        buildTimer = setTimeout(finishLoading, 12000)
+
+        player.on('canplay', function () {
+          if (!alive()) return
+          playerPhase = 'ready'
+          hideStageStatus()
+          finishLoading()
+          log('✅ canplay')
+        })
+        player.on('playing', function () {
+          if (!alive()) return
+          playerPhase = 'ready'
+          hideStageStatus()
+          finishLoading()
+          log('▶️ playing')
+        })
+        player.on('waiting', function () {
+          if (!alive() || playerPhase !== 'ready') return
+          log('⏳ 缓冲中')
+        })
+        player.on('pause', function () {
+          if (!alive()) return
+          log('⏸ 暂停')
+        })
+        player.on('ended', function () {
+          if (!alive()) return
+          log('⏹ 播放结束')
+        })
+        player.on('autoplay_was_prevented', function () {
+          if (!alive()) return
+          log('⚠️ 浏览器拦截了自动播放，请点击播放器播放按钮，或勾选“静音播放”')
+          showAlert('浏览器拦截了自动播放：请点击播放器播放按钮，或勾选「静音播放」后重试。')
+        })
+        player.on('error', function (e) {
+          if (!alive()) return
+          var msg = textOfError(e && (e.error || e))
+          playerPhase = 'error'
+          finishLoading()
+          showErrorState()
+          showAlert(msg)
+          log('❌ error: ' + msg)
+        })
+      }
+
+      function build() {
+        var url = urlInput.value.trim()
+        if (!url) {
+          showAlert('请先填写播放地址。')
+          urlInput.focus()
+          return
+        }
+        if (!hasScheme(url)) {
+          showAlert('地址需要以 http://、https://、ws:// 或 wss:// 开头。')
+          urlInput.focus()
+          return
+        }
+        if (location.protocol === 'https:' && /^ws:\/\//i.test(url) &&
+          !/^ws:\/\/(localhost|127\.0\.0\.1)([:/]|$)/i.test(url)) {
+          showAlert('HTTPS 页面无法播放 ws://，请改用 wss:// 或 https:// 地址。')
+          return
+        }
+
+        var fmt = resolveFormat(url, getRadio('fmt'))
+        if (!fmt) {
+          showAlert('无法从地址判断格式：请选择「FLV / WS」或「HLS」。')
+          return
+        }
+
+        var mode = getRadio('mode')
+        destroyPlayer(true)
+        var token = ++buildToken
+        clearAlert()
+        log('📡 地址: ' + url)
+
+        var ready = wasmProbe || probeWasm()
+        Promise.resolve(ready).then(function () {
+          if (token !== buildToken) return
+          startPlayer(fmt, mode, url)
+        })
+      }
+
+      /* ===== events ===== */
+      composer.addEventListener('submit', function (e) {
+        e.preventDefault()
+        build()
       })
-      $('probe').innerHTML = html
+
+      stopBtn.addEventListener('click', function () {
+        if (!player) {
+          clearAlert()
+          return
+        }
+        destroyPlayer(false)
+      })
+
+      $('clearLog').addEventListener('click', function () {
+        logLines = []
+        logEl.textContent = '等待播放…'
+      })
+
+      setInterval(tick, 500)
+
+      /* ===== boot ===== */
+      probePage()
+      probeHevc()
+      probeWasm()
+
+      /* ===== URL params ===== */
+      var params = new URLSearchParams(location.search)
+      if (params.get('url')) urlInput.value = params.get('url')
+
+      var fmtParam = (params.get('fmt') || '').toLowerCase()
+      if (fmtParam === 'auto' || fmtParam === 'flv' || fmtParam === 'hls') setRadio('fmt', fmtParam)
+
+      var modeParam = (params.get('mode') || '').toLowerCase()
+      if (modeParam === 'soft' || modeParam === 'true' || modeParam === '1') setRadio('mode', 'true')
+      else if (modeParam === 'hard' || modeParam === 'false' || modeParam === '0') setRadio('mode', 'false')
+      else if (modeParam === 'auto') setRadio('mode', 'auto')
+
+      if (params.get('live') !== null) liveInput.checked = params.get('live') !== 'false'
+      if (params.get('muted') !== null) mutedInput.checked = params.get('muted') !== 'false'
+
+      if (urlInput.value && params.get('autoplay') !== 'false') {
+        setTimeout(build, 500)
+      }
     })()
-
-    /* ===== Player ===== */
-    var player = null
-
-    function getCore() {
-      if (!player || !player.plugins) return null
-      var h = player.plugins.hls && player.plugins.hls.core
-      var f = player.plugins.flv && player.plugins.flv.core
-      return h || f || null
-    }
-
-    function tick() {
-      if (!player || !player.media) return
-      var c = getCore()
-      var media = player.media
-      var soft = !!(c && c.isSoftDecoding)
-      var st = c && c.softDecodeStats
-
-      $('s-decode').textContent = soft ? '🧠 wasm 软解' : '⚡ 浏览器硬解'
-      $('s-variant').textContent = (st && st.variant) || '-'
-      $('s-decoded').textContent = (st && st.decoded) || '0'
-      $('s-rendered').textContent = (st && st.rendered) || '0'
-      $('s-dropped').textContent = (st && st.dropped) || '0'
-      $('s-time').textContent = fmtTime(media.currentTime) + ' / ' + fmtTime(media.duration)
-      $('s-state').textContent = media.paused ? '⏸ 暂停' : media.ended ? '⏹ 结束' : '▶ 播放中'
-    }
-
-    function destroy() {
-      if (player) { try { player.destroy() } catch (e) {} player = null }
-      ;['s-decode','s-variant','s-decoded','s-rendered','s-dropped','s-state'].forEach(function(id){
-        $('s-decode').textContent = '-'
-        $('s-variant').textContent = '-'
-        $('s-decoded').textContent = '0'
-        $('s-rendered').textContent = '0'
-        $('s-dropped').textContent = '0'
-        $('s-time').textContent = '00:00 / 00:00'
-        $('s-state').textContent = '-'
-      })
-    }
-
-    function build() {
-      var url = $('url').value.trim()
-      if (!url) { log('⚠️ 请填写播放地址'); return }
-
-      var fmt = $('fmt').value
-      if (fmt === 'auto') {
-        fmt = /\.m3u8(\?|#|$)/i.test(url) ? 'hls' : /\.flv(\?|#|$)/i.test(url) ? 'flv' : ''
-        if (!fmt) { log('⚠️ 无法自动判断格式，请手动选择 HLS 或 FLV'); return }
-      }
-
-      destroy()
-      var mode = $('mode').value
-
-      // 本地 wasm 优先，CDN 兜底
-      var wasmBaseUrl = undefined
-      var xhr = new XMLHttpRequest()
-      xhr.open('HEAD', './wasm/decode/hevc-simd.wasm', false) // 同步检测
-      try {
-        xhr.send()
-        if (xhr.status === 200) wasmBaseUrl = './wasm'
-      } catch (e) {}
-
-      var config = {
-        id: 'player-container',
-        url: url,
-        isLive: $('live').checked,
-        autoplay: true,
-        autoplayMuted: $('muted').checked,
-        plugins: [fmt === 'hls' ? window.HlsPlayer : window.FlvPlayer],
-        softDecode: mode === 'auto' ? 'auto' : mode === 'true',
-        softDecodeOptions: wasmBaseUrl ? { wasmBaseUrl: wasmBaseUrl } : undefined,
-        onSoftDecodeFallback: function (info) {
-          log('🔄 回退软解: ' + (info && (info.reason || JSON.stringify(info))))
-        }
-      }
-
-      log('🚀 创建播放器 [' + fmt + '] softDecode=' + JSON.stringify(config.softDecode))
-      if (wasmBaseUrl) log('📁 wasm=' + wasmBaseUrl)
-      else log('🌐 wasm=CDN')
-
-      player = new window.Player(config)
-      window._player = player
-
-      player.on('canplay', function () { log('✅ canplay') })
-      player.on('playing', function () { log('▶️ playing') })
-      player.on('pause', function () { log('⏸ pause') })
-      player.on('ended', function () { log('⏹ ended') })
-      player.on('error', function (e) {
-        log('❌ error: ' + (e && (e.message || JSON.stringify(e))))
-      })
-    }
-
-    /* ===== Events ===== */
-    $('playBtn').onclick = build
-    $('stopBtn').onclick = destroy
-    setInterval(tick, 500)
-
-    /* ===== URL params auto-load ===== */
-    var q = new URLSearchParams(location.search)
-    if (q.get('url')) {
-      $('url').value = q.get('url')
-      if (q.get('autoplay') !== 'false') setTimeout(build, 500)
-    }
-  })()
   </script>
 </body>
+
 </html>

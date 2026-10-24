@@ -76,7 +76,7 @@ your-project/public/
 
 ### WebSocket FLV（`ws://` / `wss://`）
 
-`url` 直接写 WebSocket 地址即可，播放器按协议自动选择 WebSocket 传输，不需要额外配置；`softDecode` / `wasmBaseUrl` 等参数和 HTTP-FLV 完全一致：
+`url` 直接写 WebSocket 地址即可，播放器按协议自动选择 WebSocket 传输，不需要额外配置；
 
 ```js
 var player = new Player({
@@ -98,12 +98,6 @@ var player = new Player({
   }
 })
 ```
-
-- 服务端每个 WebSocket 二进制帧就是一段 FLV 字节流，帧边界可以和 FLV tag 边界不一致。
-- `ws://` 没有 HTTP 响应头，因此不参与 `Accept-Ranges` / 拖动预加载等点播逻辑，请按直播（`isLive: true`）使用。
-- 需要握手子协议时，通过 `flv.fetchOptions.wsProtocols` 传入；需要替换 WebSocket 实现时，传 `flv.fetchOptions.createWebSocket`（`(url, protocols) => WebSocket`）。
-- 还没收到数据就连接失败时按 `retryCount` 重试；已经收到数据后断开（重连会从新的 FLV 头开始）必须依靠 `disconnectRetryCount`：播放器会重建解复用器和解码器后自动重连，否则上报错误。
-- 正常关闭（code 1000）按本次推流结束处理；设置 `disconnectRetryCount` 后，缓冲播完会自动重新拉流。
 
 ---
 
@@ -167,9 +161,6 @@ cd demo
 bash start.sh
 # 浏览器打开 http://127.0.0.1:8080/demo/index.html
 ```
-
-演示页支持 FLV（含 `ws://` / `wss://`）/ HLS 播放，可在界面切换硬解/软解模式，实时查看解码状态。
-
 > wasm 文件由 `start.sh` 自动从 libmedia 官方仓库下载到 `demo/wasm/decode/`，支持离线使用。
 > 也可以单独执行 `bash scripts/download-wasm.sh` 手动下载 wasm。
 

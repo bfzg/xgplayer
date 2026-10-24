@@ -95,3 +95,5 @@ fixtures/*/*
 
 examples/
 /release/
+
+/.workbuddy-ai/
