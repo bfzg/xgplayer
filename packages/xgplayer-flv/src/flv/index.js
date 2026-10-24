@@ -94,6 +94,9 @@ export class Flv extends EventEmitter {
       ...this._opts.fetchOptions,
       retry: this._opts.retryCount,
       retryDelay: this._opts.retryDelay,
+      // A mid-stream reconnect starts a new FLV stream; let `_loadData` rebuild
+      // the demuxer through `load()` instead of Task retrying here.
+      retryAfterData: false,
       timeout: this._opts.loadTimeout,
       onRetryError: this._onRetryError,
       onProgress: this._onProgress,
@@ -378,7 +381,25 @@ export class Flv extends EventEmitter {
     this._bandwidthService.reset()
     this._stats.reset()
     await this._clear()
+    // A chunk read before the cancel can still be inside `appendBuffer`, where
+    // it flips `_discontinuity`/`_contiguous` after the reset below and makes the
+    // reconnected stream's FLV header look like tag data. Let it drain first.
+    await this._drainProgress()
     await this._bufferService.reset(reuseMse)
+  }
+
+  /**
+   * Wait for the in-flight append work to finish. `_clear()` already bumped
+   * `_progressToken`, so queued chunks are dropped; only the handler that is
+   * already running can still touch the buffer service.
+   * @private
+   */
+  async _drainProgress() {
+    for (let i = 0; i < 3; i += 1) {
+      const chain = this._progressChain
+      await chain
+      if (chain === this._progressChain) return
+    }
   }
 
   async _loadData(url, range, streamRes) {
@@ -413,6 +434,27 @@ export class Flv extends EventEmitter {
       })
     } catch (error) {
       this._loading = false
+      // The transport can fail after delivering part of the stream. A retry
+      // restarts at the FLV header, so the demuxer and sinks have to be rebuilt
+      // before reconnecting; `load()` does exactly that. Without this the new
+      // header is parsed as tag data and the stream stays stuck in
+      // `_remainingData` forever.
+      if (error?.received > 0 && this._disconnectRetryCount > 0 && this._bufferService) {
+        this._disconnectRetryCount -= 1
+        logger.warn('stream interrupted after data, reloading', error.received)
+        // Full reload: rebuild the demuxer and sinks, then keep the live feed
+        // playing. `load()` does not touch the retry budget, so a dead feed
+        // still stops after the configured number of attempts.
+        const resume = !!this.media && !this.media.paused
+        this.load()
+          .then(() => {
+            if (!this.media) return
+            if (resume) return this.media.play().catch(() => {})
+            this.media.pause()
+          })
+          .catch(() => {})
+        return
+      }
       return this._emitError(StreamingError.network(error), false)
     }
   }

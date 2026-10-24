@@ -71,6 +71,34 @@ your-project/public/
 
 > wasm cannot load from `file://`, serve the page over http.
 
+### WebSocket FLV (`ws://` / `wss://`)
+
+Put the WebSocket address in `url`; the transport is selected from the scheme and every `softDecode` option works exactly as it does for HTTP-FLV:
+
+```js
+var player = new Player({
+  id: 'player',
+  url: 'ws://192.168.1.4:8098/api/proxy/sms/pull/splw2lv.live.flv?token=...',
+  isLive: true,
+  autoplay: true,
+  plugins: [FlvPlayer],
+  softDecode: 'auto',
+  softDecodeOptions: { wasmBaseUrl: '/wasm' },
+  flv: {
+    retryCount: 3,
+    retryDelay: 1000,
+    maxReaderInterval: 5000,
+    disconnectRetryCount: 3 // reconnect after the server closes a live stream
+  }
+})
+```
+
+- Each binary WebSocket frame carries a slice of the FLV byte stream; frame boundaries do not need to match FLV tag boundaries.
+- There are no HTTP headers, so range/seek preloading does not apply. Use it as a live source (`isLive: true`).
+- Handshake subprotocols go through `flv.fetchOptions.wsProtocols`; inject another implementation with `flv.fetchOptions.createWebSocket` (`(url, protocols) => WebSocket`).
+- A connection that fails before any bytes arrive is retried `retryCount` times. A failure after data has arrived restarts the FLV stream from a new header, so it needs `disconnectRetryCount`: the player rebuilds the demuxer/sinks and reconnects, otherwise it reports an error.
+- A normal close (code 1000) ends that pull, and `disconnectRetryCount` makes the player reconnect once the buffer drains.
+
 ---
 
 ## Lazy Loading (optional)

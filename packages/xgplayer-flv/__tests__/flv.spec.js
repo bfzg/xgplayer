@@ -314,4 +314,16 @@ describe('Flv', () => {
     expect(flv.latency).toBeCloseTo(3)
   })
 
+  test('a mid-stream transport failure reloads before reconnecting', async () => {
+    const flv = new Flv({ media, isLive: true, disconnectRetryCount: 1 })
+    const load = jest.spyOn(flv, 'load').mockResolvedValue(undefined)
+    loaderLoad.mockRejectedValueOnce(Object.assign(new Error('websocket closed'), { received: 1024 }))
+
+    await flv._loadData('url')
+    await settle()
+
+    expect(load).toHaveBeenCalled()
+    expect(flv._disconnectRetryCount).toBe(0)
+  })
+
 })

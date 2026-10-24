@@ -1,6 +1,7 @@
 export const LoaderType = {
   FETCH: 'fetch',
-  XHR: 'xhr'
+  XHR: 'xhr',
+  WS: 'ws'
 }
 
 export const ResponseType = {

@@ -1,4 +1,6 @@
 import { FetchLoader } from './fetch'
+import { WsLoader } from './ws'
+import { isWsUrl } from './helper'
 import { LoaderType, ResponseType } from './types'
 import { getConfig } from './config'
 import { Task } from './task'
@@ -9,8 +11,11 @@ import EventEmitter from 'eventemitter3'
 import { getSharedDynamicTimeoutIns } from './dynamic-timeout'
 
 export {
+  FetchLoader,
+  isWsUrl,
   LoaderType,
   ResponseType,
+  WsLoader,
   getSharedDynamicTimeoutIns
 }
 
@@ -30,7 +35,9 @@ export class NetLoader extends EventEmitter {
   constructor (cfg) {
     super(cfg)
     this._config = getConfig(cfg)
-    if (
+    if (this._config.loaderType === LoaderType.WS) {
+      this.type = LoaderType.WS
+    } else if (
       this._config.loaderType === LoaderType.XHR ||
       !FetchLoader.isSupported()
     ) {
@@ -66,7 +73,10 @@ export class NetLoader extends EventEmitter {
     config.logger = this.log
     config.dynamicTimeoutIns = this._config.dynamicTimeoutIns
 
-    const task = new Task(this.type, config)
+    // A WebSocket endpoint cannot be read by fetch/xhr, whatever the configured
+    // default is, so the scheme selects the transport.
+    const taskType = isWsUrl(config.url) ? LoaderType.WS : this.type
+    const task = new Task(taskType, config)
     task.loader.on(EVENT.REAL_TIME_SPEED, (data) => {
       this.emit(EVENT.REAL_TIME_SPEED, data)
     })

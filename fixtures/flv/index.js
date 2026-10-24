@@ -72,7 +72,8 @@ if (isNaN(testPoint)) testPoint = 0
 window.onload = function () {
   // The manual-load test point feeds a pre-fetched Response into loadSource,
   // so it has to be a response for the url that is actually going to play.
-  if (opts.manualLoad && opts.url) {
+  // A ws:// url has no fetch response: the WebSocket transport streams it.
+  if (opts.manualLoad && opts.url && !/^wss?:\/\//i.test(opts.url)) {
     fetch(opts.url).then(res => {
       window.streamRes = res
     }).catch(() => {

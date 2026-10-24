@@ -60,7 +60,7 @@
       <label id="soft-worker" class="mr-3 mb-2 p-1 bg-gray-200">Worker解码<input type="checkbox" /></label>
       <label id="soft-log" class="mr-3 mb-2 p-1 bg-gray-200">解码日志<input type="checkbox" /></label>
       <label id="soft-wasm-base" class="mr-3 mb-2 p-1 bg-gray-200">wasmBaseUrl<input class="w-72" /></label>
-      <div class="w-full text-xs text-gray-500">H.265 FLV 测试流：http://localhost:8099/h265/test.flv（需先关闭“直播”，manualLoad 下点“更新参数”后播放）</div>
+      <div class="w-full text-xs text-gray-500">H.265 FLV 测试流：http://localhost:8099/h265/test.flv（需先关闭“直播”，manualLoad 下点“更新参数”后播放）<br>URL 填 <code>ws://</code> / <code>wss://</code> 地址即走 WebSocket 拉流，例如 ws://192.168.1.4:8098/api/proxy/sms/pull/splw2lv.live.flv?token=...</div>
     </div>
     <div class="flex flex-wrap">
       <button id="reset-opt" class="py-1 px-2 bg-green-500 text-white shadow-md mr-2">重置参数</button>

@@ -24,7 +24,11 @@
  *  preloadTime?: number,
  *  defaultVodLoadSize?: number,
  *  disconnectTime?: number,
- *  fetchOptions?: RequestInit,
+ *  fetchOptions?: RequestInit & {
+ *    // ws:// / wss:// transport
+ *    wsProtocols?: string | string[],
+ *    createWebSocket?: (url: string, protocols?: string | string[]) => WebSocket
+ *  },
  *  seamlesslyReload: boolean,
  *   keepStatusAfterSwitch?: boolean,
  *   onlyVideo?: boolean,

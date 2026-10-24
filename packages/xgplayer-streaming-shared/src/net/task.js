@@ -1,4 +1,5 @@
 import { FetchLoader } from './fetch'
+import { WsLoader } from './ws'
 import { XhrLoader } from './xhr'
 import { LoaderType } from './types'
 import { createPublicPromise } from '../utils'
@@ -12,7 +13,11 @@ export class Task extends EventEmitter {
     this.alive = !!config.onProgress
     !config.logger && (config.logger = new Logger('Loader'))
     this._loaderType = type
-    this._loader = type === LoaderType.FETCH && typeof fetch !== 'undefined' ? new FetchLoader() : new XhrLoader()
+    if (type === LoaderType.WS) {
+      this._loader = new WsLoader()
+    } else {
+      this._loader = type === LoaderType.FETCH && typeof fetch !== 'undefined' ? new FetchLoader() : new XhrLoader()
+    }
     this._config = config
     this._retryCount = 0
     this._retryTimer = null
@@ -87,6 +92,17 @@ export class Task extends EventEmitter {
         }
         this._logger.debug('[task error],isRetry', this._isRetry, ',outChangeUrlRetry,', rest.outChangeUrlRetry, ',retryType',retryType)
         this.emitNetErrorEvent(rest.url, retryType, e)
+        // A retried request restarts the byte stream at its header. Once bytes
+        // have arrived the demuxer is mid-stream, so only the caller (FLV) can
+        // reset it; retrying here would append a second stream into the same
+        // parser and silently desynchronise it.
+        const received = this._loader?.receiveLen || 0
+        if (received > 0 && this._config.retryAfterData === false) {
+          error.received = received
+          this._isRetry = false
+          this.promise.reject(error)
+          return
+        }
         if (isRetry && this._retryCount <= retry) {
           this._isRetry = true
           clearTimeout(this._retryTimer)

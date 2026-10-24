@@ -1,5 +1,14 @@
 import { isDate, isObject } from '../is'
 
+/**
+ * Whether the url uses the WebSocket scheme (`ws:` / `wss:`).
+ * @param {string} url
+ * @returns {boolean}
+ */
+export function isWsUrl (url) {
+  return typeof url === 'string' && /^wss?:\/\//i.test(url.trim())
+}
+
 export function getRangeValue (value) {
   if (!value || value[0] === null || value[0] === undefined || (value[0] === 0 && (value[1] === null || value[1] === undefined))) {
     return

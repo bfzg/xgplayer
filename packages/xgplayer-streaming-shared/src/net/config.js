@@ -5,6 +5,7 @@ export function getConfig (cfg) {
     loaderType: LoaderType.FETCH,
     retry: 0,
     retryDelay: 0, // ms
+    retryAfterData: true, // false: reconnecting mid-stream restarts the payload, caller must reset
     timeout: 0,
     request: null, // Request
     onTimeout: undefined,
@@ -31,6 +32,9 @@ export function getConfig (cfg) {
     processMaxGapTime: Infinity, // process流式获取数据时，在请求没有结束前，两次读取到数据的最大超时时间
     rangeRequestZeroContentLengthAsError: false,
     rangeRequestMustReturn206: false,
+    // WebSocket transport (`ws:` / `wss:` urls)
+    wsProtocols: undefined,
+    createWebSocket: undefined,
     ...cfg
   }
 }
